@@ -13,9 +13,26 @@ import { chatStream, getConfiguredModel, getConfiguredProvider, POPULAR_MODELS, 
 import { SYSTEM_PROMPT } from '../../llm/prompts/system.js';
 import { formatExamplesForPrompt } from '../../llm/prompts/examples.js';
 import { getLLMConfig, OPENROUTER_BASE_URL } from '../../llm/config.js';
-import { planCodeStructure, generateFile, type Component, type FilePlan, type GeneratedFile } from '../../codegen/index.js';
-import { stashArtifacts, loadArtifacts, hasStashedArtifacts, deleteArtifacts, slugify } from '../../server/services/artifacts.js';
+import { planCodeStructure, generateFile, editFile, type Component, type FilePlan, type GeneratedFile } from '../../codegen/index.js';
+import { deriveBrickAppContract, validateBrickAppContract } from '../../bac/index.js';
+import type { BrickAppContract } from '../../types/bac.js';
+import { stashArtifacts, loadArtifacts, deleteArtifacts, slugify } from '../../server/services/artifacts.js';
 import YAML from 'yaml';
+
+interface ComponentSpec {
+  description?: string;
+  inputs?: string;
+  outputs?: string;
+  notes?: string;
+  markdown?: string;
+  innerComponents?: Array<{ name: string; description?: string }>;
+}
+
+interface ArchConnectionContract {
+  sourceOutput?: string;
+  targetInput?: string;
+  notes?: string;
+}
 
 // Project file storage (in-memory for now)
 interface ProjectFile {
@@ -28,7 +45,8 @@ interface ProjectFile {
 
 interface ProjectData {
   files: Map<string, ProjectFile>;
-  componentSpecs: Record<string, { description?: string; inputs?: string; outputs?: string; notes?: string }>;
+  componentSpecs: Record<string, ComponentSpec>;
+  lastGeneratedComponents: Component[];
 }
 
 // Saved project metadata
@@ -39,9 +57,11 @@ interface SavedProject {
   createdAt: Date;
   editedAt: Date;
   architecture: ManualArchitecture | null;
-  componentSpecs: Record<string, { description?: string; inputs?: string; outputs?: string; notes?: string }>;
+  componentSpecs: Record<string, ComponentSpec>;
+  bac: BrickAppContract | null;
   diagram: string | null;
   documentation: string;
+  lastGeneratedComponents: Component[];
 }
 
 // In-memory project storage (in production, this would be a database)
@@ -94,6 +114,7 @@ interface ArchConnection {
   from: string;
   to: string;
   label?: string; // Connection label (e.g., "ML Features", "auth data")
+  contract?: ArchConnectionContract;
 }
 
 interface ManualArchitecture {
@@ -124,6 +145,162 @@ interface ArchitectureTemplate {
 interface ArchitectureTemplatesFile {
   version: string;
   templates: ArchitectureTemplate[];
+}
+
+type EditStrategy = 'targeted_edit' | 'full_regeneration';
+
+interface ArchitectureDiff {
+  changed: Set<string>;
+  removed: Set<string>;
+  hasChanges: boolean;
+}
+
+const TARGETED_SHARED_FILES = new Set([
+  'package.json',
+  '.env.example',
+  'README.md',
+  'Dockerfile',
+  'docker-compose.yml',
+  'tsconfig.json',
+]);
+
+function componentSignature(component: Component): string {
+  const connections = (component.connections || []).slice().sort().join(',');
+  return `${component.name}|${component.type}|${connections}`;
+}
+
+function specSignature(spec: ComponentSpec | undefined): string {
+  return JSON.stringify({
+    description: spec?.description || '',
+    inputs: spec?.inputs || '',
+    outputs: spec?.outputs || '',
+    notes: spec?.notes || '',
+  });
+}
+
+function diffArchitectureAndSpecs(
+  previousComponents: Component[],
+  nextComponents: Component[],
+  previousSpecs: Record<string, ComponentSpec>,
+  nextSpecs: Record<string, ComponentSpec>
+): ArchitectureDiff {
+  const changed = new Set<string>();
+  const previousById = new Map(previousComponents.map(component => [component.id, component]));
+
+  for (const next of nextComponents) {
+    const previous = previousById.get(next.id);
+    if (!previous) {
+      changed.add(next.id);
+    } else if (componentSignature(previous) !== componentSignature(next)) {
+      changed.add(next.id);
+    }
+
+    if (specSignature(previousSpecs[next.id]) !== specSignature(nextSpecs[next.id])) {
+      changed.add(next.id);
+    }
+
+    previousById.delete(next.id);
+  }
+
+  const removed = new Set(previousById.keys());
+  return { changed, removed, hasChanges: changed.size > 0 || removed.size > 0 };
+}
+
+function pickFilesForGeneration(
+  planFiles: FilePlan[],
+  existingFiles: Map<string, ProjectFile>,
+  diff: ArchitectureDiff,
+  strategy: EditStrategy
+): FilePlan[] {
+  if (strategy === 'full_regeneration' || existingFiles.size === 0) {
+    return planFiles;
+  }
+
+  const selectedPaths = new Set<string>();
+
+  for (const file of planFiles) {
+    const existing = existingFiles.get(file.path);
+
+    if (!existing) {
+      selectedPaths.add(file.path);
+      continue;
+    }
+
+    if (file.componentId && diff.changed.has(file.componentId)) {
+      selectedPaths.add(file.path);
+      continue;
+    }
+
+    if (!file.componentId && diff.hasChanges && TARGETED_SHARED_FILES.has(file.path)) {
+      selectedPaths.add(file.path);
+      continue;
+    }
+  }
+
+  // Pull in files that depend on changed files.
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (const file of planFiles) {
+      if (selectedPaths.has(file.path)) continue;
+      if (file.dependencies.some(dep => selectedPaths.has(dep))) {
+        selectedPaths.add(file.path);
+        expanded = true;
+      }
+    }
+  }
+
+  return planFiles.filter(file => selectedPaths.has(file.path));
+}
+
+function buildEditRequest(
+  file: FilePlan,
+  componentsById: Map<string, Component>,
+  diff: ArchitectureDiff
+): string {
+  if (file.componentId) {
+    const component = componentsById.get(file.componentId);
+    if (component) {
+      return `Update this file to reflect the latest architecture/spec changes for component "${component.name}" (${component.type}). Preserve existing behavior that still applies.`;
+    }
+  }
+
+  const changedIds = Array.from(diff.changed);
+  if (changedIds.length > 0) {
+    return `Update this shared file to stay consistent with the latest architecture and component spec changes for: ${changedIds.join(', ')}. Keep the existing structure when possible.`;
+  }
+
+  return 'Keep this file aligned with the current architecture while preserving existing implementation details.';
+}
+
+function componentIdToIndex(id: string): number {
+  const letters = id.toUpperCase().replace(/[^A-Z]/g, '');
+  if (letters.length > 0) {
+    let acc = 0;
+    for (const letter of letters) {
+      acc = acc * 26 + (letter.charCodeAt(0) - 64);
+    }
+    return Math.max(0, acc - 1);
+  }
+
+  const digits = parseInt(id.replace(/\D/g, ''), 10);
+  return Number.isFinite(digits) ? Math.max(0, digits) : 0;
+}
+
+function indexToComponentId(index: number): string {
+  let value = Math.max(0, index) + 1;
+  let label = '';
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label;
+}
+
+function nextComponentIndex(components: Array<{ id: string }>): number {
+  if (components.length === 0) return 0;
+  return Math.max(...components.map(component => componentIdToIndex(component.id))) + 1;
 }
 
 // Icon mapping based on template tier
@@ -218,6 +395,7 @@ function loadArchitectureTemplates(): Record<string, { name: string; description
         .map(conn => ({
           from: componentNameToId[conn.from],
           to: componentNameToId[conn.to],
+          label: conn.protocol || undefined,
         }));
 
       templates[id] = {
@@ -267,11 +445,13 @@ export const uiCommand = new Command('ui')
     let currentProject: ProjectData = {
       files: new Map(),
       componentSpecs: {},
+      lastGeneratedComponents: [],
     };
     let currentProjectId: string | null = null;
     let isGeneratingCode = false;
     let manualArchitecture: ManualArchitecture | null = null;
-    let nextComponentId = 1;
+    let nextComponentId = 0;
+    let currentBAC: BrickAppContract | null = null;
 
     // Helper to generate unique IDs
     function generateId(): string {
@@ -292,8 +472,10 @@ export const uiCommand = new Command('ui')
         editedAt: new Date(),
         architecture: manualArchitecture,
         componentSpecs: currentProject.componentSpecs,
+        bac: currentBAC,
         diagram: currentDiagram,
         documentation: documentation || savedProjects.get(currentProjectId)?.documentation || '',
+        lastGeneratedComponents: currentProject.lastGeneratedComponents,
       };
       savedProjects.set(currentProjectId, project);
       return project;
@@ -333,17 +515,79 @@ export const uiCommand = new Command('ui')
       }
 
       for (const conn of arch.connections) {
-        lines.push(`    ${conn.from} --> ${conn.to}`);
+        if (conn.label) {
+          const safeLabel = String(conn.label).replace(/\|/g, '/').trim();
+          lines.push(`    ${conn.from} -->|${safeLabel}| ${conn.to}`);
+        } else {
+          lines.push(`    ${conn.from} --> ${conn.to}`);
+        }
       }
 
       return lines.join('\n');
+    }
+
+    function refreshBACFromCurrentArchitecture(intent?: string): void {
+      try {
+        if (manualArchitecture) {
+          const ir = manualToIR(manualArchitecture);
+          const components: Component[] = ir.components.map(component => ({
+            id: component.id,
+            name: component.name,
+            type: component.type,
+            connections: component.connections || [],
+            spec: currentProject.componentSpecs[component.id] || {},
+          }));
+          currentBAC = deriveBrickAppContract({
+            appName: ir.name || 'brick-app',
+            intent,
+            components,
+            connections: manualArchitecture.connections.map(connection => ({
+              from: connection.from,
+              to: connection.to,
+              label: connection.label,
+              contract: connection.contract ? {
+                sourceOutput: connection.contract.sourceOutput,
+                targetInput: connection.contract.targetInput,
+                notes: connection.contract.notes,
+              } : undefined,
+            })),
+            existing: currentBAC,
+          });
+          return;
+        }
+
+        if (currentDiagram) {
+          const ast = parse(currentDiagram);
+          const ir = transform(ast);
+          const components: Component[] = ir.components.map(component => ({
+            id: component.id,
+            name: component.name,
+            type: component.type,
+            connections: component.connections || [],
+            spec: currentProject.componentSpecs[component.id] || {},
+          }));
+          currentBAC = deriveBrickAppContract({
+            appName: ir.name || 'brick-app',
+            intent,
+            region: ir.region,
+            components,
+            connections: ir.components.flatMap(component =>
+              (component.connections || []).map(to => ({ from: component.id, to }))
+            ),
+            existing: currentBAC,
+          });
+          return;
+        }
+      } catch {
+        // Keep previous BAC when architecture parsing fails.
+      }
     }
 
     const server = createServer(async (req, res) => {
       const url = new URL(req.url || '/', `http://localhost:${port}`);
 
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
       if (req.method === 'OPTIONS') {
@@ -388,7 +632,7 @@ export const uiCommand = new Command('ui')
         }
       }
 
-      // Claude Code agent — SSE stream
+      // Claude Code agent — SSE stream (persistent process)
       if (url.pathname === '/api/agent/claude-code' && req.method === 'POST') {
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
@@ -406,15 +650,15 @@ export const uiCommand = new Command('ui')
             return;
           }
 
-          const { executeClaudeCode, cancelClaudeCode } = await import('../../agent/claude-code.js');
+          const { sendMessage, cancelCurrentRequest } = await import('../../agent/claude-code.js');
 
           // Cancel on client disconnect
           req.on('close', () => {
-            cancelClaudeCode();
+            cancelCurrentRequest();
           });
 
-          // Stream Claude Code events
-          for await (const event of executeClaudeCode(instruction, process.cwd())) {
+          // Stream events from the persistent Claude Code process
+          for await (const event of sendMessage(instruction, process.cwd())) {
             res.write(`data: ${JSON.stringify(event)}\n\n`);
           }
         } catch (error) {
@@ -425,10 +669,27 @@ export const uiCommand = new Command('ui')
         return;
       }
 
-      // Claude Code agent — cancel
+      // Claude Code agent — conversation history
+      if (url.pathname === '/api/agent/claude-code/history' && req.method === 'GET') {
+        const { getConversationHistory } = await import('../../agent/claude-code.js');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(getConversationHistory()));
+        return;
+      }
+
+      // Claude Code agent — reset conversation (kill process + clear history)
+      if (url.pathname === '/api/agent/claude-code/reset' && req.method === 'POST') {
+        const { clearConversation } = await import('../../agent/claude-code.js');
+        clearConversation();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      // Claude Code agent — cancel current request
       if (url.pathname === '/api/agent/claude-code/cancel' && req.method === 'POST') {
-        const { cancelClaudeCode } = await import('../../agent/claude-code.js');
-        const cancelled = cancelClaudeCode();
+        const { cancelCurrentRequest } = await import('../../agent/claude-code.js');
+        const cancelled = cancelCurrentRequest();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ cancelled }));
         return;
@@ -491,6 +752,8 @@ export const uiCommand = new Command('ui')
             currentDiagram = diagram;
           }
 
+          refreshBACFromCurrentArchitecture(message);
+
           // Calculate cost and IR
           let costEstimate = null;
           let ir = null;
@@ -506,7 +769,7 @@ export const uiCommand = new Command('ui')
             }
           }
 
-          res.write(`data: ${JSON.stringify({ done: true, diagram: currentDiagram, explanation, cost: costEstimate, ir })}\n\n`);
+          res.write(`data: ${JSON.stringify({ done: true, diagram: currentDiagram, explanation, cost: costEstimate, ir, bac: currentBAC })}\n\n`);
           res.end();
         } catch (error) {
           res.write(`data: ${JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' })}\n\n`);
@@ -519,6 +782,9 @@ export const uiCommand = new Command('ui')
         try {
           const body = await getRequestBody(req);
           const { componentSpecs: specs } = body ? JSON.parse(body) : {};
+          if (specs && typeof specs === 'object') {
+            currentProject.componentSpecs = specs as Record<string, ComponentSpec>;
+          }
 
           if (!currentDiagram) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -532,9 +798,10 @@ export const uiCommand = new Command('ui')
           const appspec = YAML.parse(yaml);
           const validation = validate(appspec);
           const cost = estimateCost(appspec);
+          refreshBACFromCurrentArchitecture();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ yaml, validation, cost, ir, componentSpecs: specs }));
+          res.end(JSON.stringify({ yaml, validation, cost, ir, componentSpecs: specs, bac: currentBAC }));
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
@@ -545,9 +812,12 @@ export const uiCommand = new Command('ui')
       if (url.pathname === '/api/reset' && req.method === 'POST') {
         conversationHistory = [];
         currentDiagram = null;
-        currentProject = { files: new Map(), componentSpecs: {} };
+        currentProject = { files: new Map(), componentSpecs: {}, lastGeneratedComponents: [] };
         manualArchitecture = null;
-        nextComponentId = 1;
+        nextComponentId = 0;
+        currentBAC = null;
+        // Also reset the dev mode Claude Code session
+        import('../../agent/claude-code.js').then(m => m.clearConversation()).catch(() => {});
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
         return;
@@ -588,6 +858,28 @@ export const uiCommand = new Command('ui')
         return;
       }
 
+      if (url.pathname === '/api/component-specs' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ componentSpecs: currentProject.componentSpecs, bac: currentBAC }));
+        return;
+      }
+
+      if (url.pathname === '/api/component-specs' && req.method === 'PUT') {
+        try {
+          const body = await getRequestBody(req);
+          const { componentSpecs } = body ? JSON.parse(body) : {};
+          currentProject.componentSpecs = (componentSpecs || {}) as Record<string, ComponentSpec>;
+          refreshBACFromCurrentArchitecture();
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, bac: currentBAC }));
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
+        }
+        return;
+      }
+
       // Code generation endpoint (streaming)
       if (url.pathname === '/api/generate-code' && req.method === 'POST') {
         if (isGeneratingCode) {
@@ -605,7 +897,11 @@ export const uiCommand = new Command('ui')
         try {
           isGeneratingCode = true;
           const body = await getRequestBody(req);
-          const { componentSpecs } = body ? JSON.parse(body) : {};
+          const parsedBody = body ? JSON.parse(body) : {};
+          const componentSpecs = (parsedBody.componentSpecs || {}) as Record<string, ComponentSpec>;
+          const strategy: EditStrategy = parsedBody.strategy === 'full_regeneration'
+            ? 'full_regeneration'
+            : 'targeted_edit';
 
           if (!currentDiagram) {
             res.write(`data: ${JSON.stringify({ error: 'No architecture to generate code from' })}\n\n`);
@@ -627,8 +923,10 @@ export const uiCommand = new Command('ui')
             spec: componentSpecs?.[c.id] || {},
           }));
 
-          // Store specs
-          currentProject.componentSpecs = componentSpecs || {};
+          const previousSpecs = currentProject.componentSpecs;
+          const previousComponents = currentProject.lastGeneratedComponents;
+          const diff = diffArchitectureAndSpecs(previousComponents, components, previousSpecs, componentSpecs);
+          const componentsById = new Map(components.map(component => [component.id, component]));
 
           // Get LLM config
           let config;
@@ -648,29 +946,74 @@ export const uiCommand = new Command('ui')
           res.write(`data: ${JSON.stringify({ status: 'planning', message: 'Planning file structure...' })}\n\n`);
 
           const plan = await planCodeStructure(components, ir.name || 'app', config);
+          const filesToGenerate = pickFilesForGeneration(plan.files, currentProject.files, diff, strategy);
+          const filesToGenerateSet = new Set(filesToGenerate.map(file => file.path));
 
-          res.write(`data: ${JSON.stringify({ status: 'planned', files: plan.files.map(f => f.path) })}\n\n`);
+          // Remove stale files that no longer appear in plan or map to removed components.
+          const plannedPaths = new Set(plan.files.map(file => file.path));
+          for (const [path, file] of currentProject.files.entries()) {
+            const removedComponent = file.componentId ? diff.removed.has(file.componentId) : false;
+            if (!plannedPaths.has(path) || removedComponent) {
+              currentProject.files.delete(path);
+              res.write(`data: ${JSON.stringify({ status: 'file_removed', file: path })}\n\n`);
+            }
+          }
 
-          // Step 2: Generate files one by one
-          const existingFiles = new Map<string, string>();
+          res.write(`data: ${JSON.stringify({
+            status: 'planned',
+            files: plan.files.map(f => f.path),
+            strategy,
+            generateCount: filesToGenerate.length,
+          })}\n\n`);
+
+          // Emit unchanged files so the client receives a complete file list.
+          const untouchedFiles = plan.files.filter(file =>
+            !filesToGenerateSet.has(file.path) && currentProject.files.has(file.path)
+          );
+          for (const file of untouchedFiles) {
+            const existing = currentProject.files.get(file.path);
+            if (!existing) continue;
+            res.write(`data: ${JSON.stringify({
+              status: 'file_complete',
+              file: file.path,
+              content: existing.content,
+              componentId: existing.componentId,
+            })}\n\n`);
+          }
+
+          // Step 2: Generate or edit files one by one
+          const existingFiles = new Map<string, string>(
+            Array.from(currentProject.files.values()).map(file => [file.path, file.content])
+          );
           const generatedFiles: GeneratedFile[] = [];
 
-          for (let i = 0; i < plan.files.length; i++) {
-            const file = plan.files[i];
+          for (let i = 0; i < filesToGenerate.length; i++) {
+            const file = filesToGenerate[i];
             res.write(`data: ${JSON.stringify({
               status: 'generating',
               file: file.path,
-              progress: i,
-              total: plan.files.length
+              progress: i + 1,
+              total: filesToGenerate.length,
+              strategy,
             })}\n\n`);
 
             try {
-              const generated = await generateFile({
-                file,
-                components,
-                existingFiles,
-                config,
-              });
+              const existing = currentProject.files.get(file.path);
+              const generated = existing && strategy === 'targeted_edit'
+                ? await editFile({
+                  file,
+                  components,
+                  existingFiles,
+                  existingContent: existing.content,
+                  editRequest: buildEditRequest(file, componentsById, diff),
+                  config,
+                })
+                : await generateFile({
+                  file,
+                  components,
+                  existingFiles,
+                  config,
+                });
 
               generatedFiles.push(generated);
               existingFiles.set(file.path, generated.content);
@@ -681,7 +1024,7 @@ export const uiCommand = new Command('ui')
                 content: generated.content,
                 componentId: file.componentId,
                 generatedAt: new Date(),
-                isManuallyEdited: false,
+                isManuallyEdited: existing?.isManuallyEdited || false,
               });
 
               res.write(`data: ${JSON.stringify({
@@ -699,22 +1042,29 @@ export const uiCommand = new Command('ui')
             }
           }
 
+          // Persist current architecture snapshot for targeted edits on next run.
+          currentProject.componentSpecs = componentSpecs;
+          currentProject.lastGeneratedComponents = components;
+          refreshBACFromCurrentArchitecture();
+
           // Stash artifacts to disk for persistence
           const savedProject = currentProjectId ? savedProjects.get(currentProjectId) : null;
           if (savedProject) {
             const artifactSlug = savedProject.slug;
-            const hasExisting = await hasStashedArtifacts(artifactSlug);
-            if (!hasExisting) {
-              const artifactFiles = Array.from(currentProject.files.values()).map(f => ({
-                path: f.path,
-                content: f.content,
-                componentId: f.componentId,
-              }));
-              await stashArtifacts(artifactSlug, savedProject.id, artifactFiles);
-            }
+            const artifactFiles = Array.from(currentProject.files.values()).map(f => ({
+              path: f.path,
+              content: f.content,
+              componentId: f.componentId,
+            }));
+            await stashArtifacts(artifactSlug, savedProject.id, artifactFiles);
           }
 
-          res.write(`data: ${JSON.stringify({ status: 'complete', fileCount: generatedFiles.length })}\n\n`);
+          res.write(`data: ${JSON.stringify({
+            status: 'complete',
+            fileCount: currentProject.files.size,
+            generatedCount: generatedFiles.length,
+            strategy,
+          })}\n\n`);
           res.end();
         } catch (error) {
           res.write(`data: ${JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' })}\n\n`);
@@ -935,17 +1285,15 @@ export const uiCommand = new Command('ui')
 
           // Deep clone the template architecture
           manualArchitecture = JSON.parse(JSON.stringify(template.architecture));
-          nextComponentId = Math.max(...manualArchitecture!.components.map(c => {
-            const num = parseInt(c.id.replace(/\D/g, '')) || 0;
-            return num;
-          }), 0) + 1;
+          nextComponentId = nextComponentIndex(manualArchitecture!.components);
 
           // Generate Mermaid and IR
           currentDiagram = manualToMermaid(manualArchitecture!);
           const ir = manualToIR(manualArchitecture!);
+          refreshBACFromCurrentArchitecture();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ architecture: manualArchitecture, ir, diagram: currentDiagram }));
+          res.end(JSON.stringify({ architecture: manualArchitecture, ir, diagram: currentDiagram, bac: currentBAC }));
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
@@ -957,13 +1305,41 @@ export const uiCommand = new Command('ui')
       if (url.pathname === '/api/architecture' && req.method === 'GET') {
         if (!manualArchitecture) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ architecture: null }));
+          res.end(JSON.stringify({ architecture: null, bac: currentBAC }));
           return;
         }
 
         const ir = manualToIR(manualArchitecture);
+        refreshBACFromCurrentArchitecture();
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ architecture: manualArchitecture, ir }));
+        res.end(JSON.stringify({ architecture: manualArchitecture, ir, bac: currentBAC }));
+        return;
+      }
+
+      // Replace current manual architecture (used by undo/redo)
+      if (url.pathname === '/api/architecture' && req.method === 'POST') {
+        try {
+          const body = await getRequestBody(req);
+          const { architecture } = JSON.parse(body);
+
+          if (!architecture || !Array.isArray(architecture.components) || !Array.isArray(architecture.connections)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid architecture payload' }));
+            return;
+          }
+
+          manualArchitecture = architecture as ManualArchitecture;
+          nextComponentId = nextComponentIndex(manualArchitecture.components);
+          currentDiagram = manualToMermaid(manualArchitecture);
+          const ir = manualToIR(manualArchitecture);
+          refreshBACFromCurrentArchitecture();
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ architecture: manualArchitecture, ir, bac: currentBAC }));
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
+        }
         return;
       }
 
@@ -977,7 +1353,7 @@ export const uiCommand = new Command('ui')
             manualArchitecture = { name: 'my-app', components: [], connections: [] };
           }
 
-          const id = String.fromCharCode(65 + nextComponentId++); // A, B, C, ...
+          const id = indexToComponentId(nextComponentId++);
           const component: ArchComponent = {
             id,
             name: name || type.charAt(0).toUpperCase() + type.slice(1),
@@ -989,9 +1365,10 @@ export const uiCommand = new Command('ui')
           manualArchitecture.components.push(component);
           currentDiagram = manualToMermaid(manualArchitecture);
           const ir = manualToIR(manualArchitecture);
+          refreshBACFromCurrentArchitecture();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ component, architecture: manualArchitecture, ir }));
+          res.end(JSON.stringify({ component, architecture: manualArchitecture, ir, bac: currentBAC }));
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
@@ -1024,9 +1401,10 @@ export const uiCommand = new Command('ui')
 
           currentDiagram = manualToMermaid(manualArchitecture);
           const ir = manualToIR(manualArchitecture);
+          refreshBACFromCurrentArchitecture();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ component, architecture: manualArchitecture, ir }));
+          res.end(JSON.stringify({ component, architecture: manualArchitecture, ir, bac: currentBAC }));
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
@@ -1052,9 +1430,10 @@ export const uiCommand = new Command('ui')
 
           currentDiagram = manualToMermaid(manualArchitecture);
           const ir = manualToIR(manualArchitecture);
+          refreshBACFromCurrentArchitecture();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ architecture: manualArchitecture, ir }));
+          res.end(JSON.stringify({ architecture: manualArchitecture, ir, bac: currentBAC }));
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
@@ -1066,28 +1445,101 @@ export const uiCommand = new Command('ui')
       if (url.pathname === '/api/connection' && req.method === 'POST') {
         try {
           const body = await getRequestBody(req);
-          const { from, to } = JSON.parse(body);
+          const { from, to, label, contract } = JSON.parse(body) as {
+            from?: string;
+            to?: string;
+            label?: string;
+            contract?: ArchConnectionContract;
+          };
 
-          if (!manualArchitecture) {
+          if (!manualArchitecture || !from || !to) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'No architecture' }));
+            res.end(JSON.stringify({ error: 'No architecture or missing connection endpoints' }));
             return;
           }
 
           // Check if connection already exists
-          const exists = manualArchitecture.connections.some(
+          const existing = manualArchitecture.connections.find(
             c => c.from === from && c.to === to
           );
 
-          if (!exists) {
-            manualArchitecture.connections.push({ from, to });
-            currentDiagram = manualToMermaid(manualArchitecture);
+          if (!existing) {
+            manualArchitecture.connections.push({
+              from,
+              to,
+              label: typeof label === 'string' ? label : undefined,
+              contract: contract || undefined,
+            });
+          } else {
+            if (typeof label === 'string') {
+              existing.label = label;
+            }
+            if (contract && typeof contract === 'object') {
+              existing.contract = {
+                ...(existing.contract || {}),
+                ...contract,
+              };
+            }
           }
 
+          currentDiagram = manualToMermaid(manualArchitecture);
+
           const ir = manualToIR(manualArchitecture);
+          refreshBACFromCurrentArchitecture();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ architecture: manualArchitecture, ir }));
+          res.end(JSON.stringify({ architecture: manualArchitecture, ir, bac: currentBAC }));
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
+        }
+        return;
+      }
+
+      // Update an existing connection (label/data contract)
+      if (url.pathname === '/api/connection' && req.method === 'PUT') {
+        try {
+          const body = await getRequestBody(req);
+          const { from, to, label, contract } = JSON.parse(body) as {
+            from?: string;
+            to?: string;
+            label?: string;
+            contract?: ArchConnectionContract;
+          };
+
+          if (!manualArchitecture || !from || !to) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No architecture or missing connection endpoints' }));
+            return;
+          }
+
+          const connection = manualArchitecture.connections.find(
+            c => c.from === from && c.to === to
+          );
+
+          if (!connection) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Connection not found' }));
+            return;
+          }
+
+          if (typeof label === 'string') {
+            connection.label = label;
+          }
+
+          if (contract && typeof contract === 'object') {
+            connection.contract = {
+              ...(connection.contract || {}),
+              ...contract,
+            };
+          }
+
+          currentDiagram = manualToMermaid(manualArchitecture);
+          const ir = manualToIR(manualArchitecture);
+          refreshBACFromCurrentArchitecture();
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ architecture: manualArchitecture, ir, bac: currentBAC }));
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
@@ -1113,9 +1565,10 @@ export const uiCommand = new Command('ui')
 
           currentDiagram = manualToMermaid(manualArchitecture);
           const ir = manualToIR(manualArchitecture);
+          refreshBACFromCurrentArchitecture();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ architecture: manualArchitecture, ir }));
+          res.end(JSON.stringify({ architecture: manualArchitecture, ir, bac: currentBAC }));
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
@@ -1136,9 +1589,54 @@ export const uiCommand = new Command('ui')
           }
 
           currentDiagram = manualToMermaid(manualArchitecture);
+          refreshBACFromCurrentArchitecture();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true }));
+          res.end(JSON.stringify({ success: true, bac: currentBAC }));
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
+        }
+        return;
+      }
+
+      // Get current Brick App Contract (BAC)
+      if (url.pathname === '/api/bac' && req.method === 'GET') {
+        refreshBACFromCurrentArchitecture();
+        if (!currentBAC) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ bac: null, validation: { valid: false, errors: ['No architecture available'] } }));
+          return;
+        }
+
+        const validation = validateBrickAppContract(currentBAC);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ bac: currentBAC, validation }));
+        return;
+      }
+
+      // Replace current BAC
+      if (url.pathname === '/api/bac' && req.method === 'PUT') {
+        try {
+          const body = await getRequestBody(req);
+          const { bac } = JSON.parse(body) as { bac: BrickAppContract };
+
+          if (!bac) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing bac payload' }));
+            return;
+          }
+
+          const validation = validateBrickAppContract(bac);
+          if (!validation.valid) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid BAC payload', validation }));
+            return;
+          }
+
+          currentBAC = bac;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ bac: currentBAC, validation }));
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
@@ -1282,6 +1780,7 @@ export const uiCommand = new Command('ui')
         try {
           const body = await getRequestBody(req);
           const { name, documentation } = body ? JSON.parse(body) : {};
+          refreshBACFromCurrentArchitecture();
 
           if (!currentProjectId) {
             currentProjectId = generateId();
@@ -1295,8 +1794,10 @@ export const uiCommand = new Command('ui')
             editedAt: new Date(),
             architecture: manualArchitecture,
             componentSpecs: currentProject.componentSpecs,
+            bac: currentBAC,
             diagram: currentDiagram,
             documentation: documentation || savedProjects.get(currentProjectId)?.documentation || '',
+            lastGeneratedComponents: currentProject.lastGeneratedComponents,
           };
           savedProjects.set(currentProjectId, project);
 
@@ -1324,8 +1825,15 @@ export const uiCommand = new Command('ui')
         currentProjectId = project.id;
         manualArchitecture = project.architecture;
         currentProject.componentSpecs = project.componentSpecs;
+        currentProject.lastGeneratedComponents = project.lastGeneratedComponents || [];
+        currentBAC = project.bac || null;
         currentDiagram = project.diagram;
         conversationHistory = [];
+        // Also reset the dev mode Claude Code session when loading a new project
+        import('../../agent/claude-code.js').then(m => m.clearConversation()).catch(() => {});
+        if (!currentBAC) {
+          refreshBACFromCurrentArchitecture();
+        }
 
         // Restore files from stashed artifacts
         currentProject.files.clear();
@@ -1344,12 +1852,9 @@ export const uiCommand = new Command('ui')
 
         // Recalculate nextComponentId
         if (manualArchitecture?.components.length) {
-          nextComponentId = Math.max(...manualArchitecture.components.map(c => {
-            const num = parseInt(c.id.replace(/\D/g, '')) || 0;
-            return num;
-          }), 0) + 1;
+          nextComponentId = nextComponentIndex(manualArchitecture.components);
         } else {
-          nextComponentId = 1;
+          nextComponentId = 0;
         }
 
         const ir = manualArchitecture ? manualToIR(manualArchitecture) : null;
@@ -1360,6 +1865,7 @@ export const uiCommand = new Command('ui')
           architecture: manualArchitecture,
           ir,
           diagram: currentDiagram,
+          bac: currentBAC,
           documentation: project.documentation || '',
           hasFiles: currentProject.files.size > 0,
         }));
@@ -1385,6 +1891,10 @@ export const uiCommand = new Command('ui')
         // If we deleted the current project, clear state
         if (currentProjectId === projectId) {
           currentProjectId = null;
+          currentProject = { files: new Map(), componentSpecs: {}, lastGeneratedComponents: [] };
+          manualArchitecture = null;
+          currentDiagram = null;
+          currentBAC = null;
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -5843,7 +6353,7 @@ function getHtmlPage(): string {
     }
 
     // React Flow Canvas Component - Eraser.io Style
-    function Canvas({ ir, manualArch, componentSpecs, onNodeClick, onNodeDrag, connectingFrom, onStartConnect, onDeleteNode, onDeleteConnection, builderMode, onAutoLayout, onUndo, onRedo, canUndo, canRedo }) {
+    function Canvas({ ir, manualArch, componentSpecs, onNodeClick, onNodeDrag, connectingFrom, onStartConnect, onAddConnection, onDeleteNode, onDeleteConnection, builderMode, onAutoLayout, onUndo, onRedo, canUndo, canRedo }) {
       // Get React hooks
       const { useMemo, useCallback, useEffect } = React;
 
@@ -5992,6 +6502,7 @@ function getHtmlPage(): string {
             source: conn.from,
             target: conn.to,
             type: 'smoothstep',
+            label: conn.label || undefined,
             animated: false,
             style: { stroke: color, strokeWidth: 2 },
             markerEnd: { type: MarkerType.ArrowClosed, color }
@@ -6053,9 +6564,11 @@ function getHtmlPage(): string {
             style: { stroke: color, strokeWidth: 2 },
             markerEnd: { type: MarkerType.ArrowClosed, color }
           }, eds));
-          // TODO: Call API to save connection
+          if (onAddConnection && params.source && params.target) {
+            onAddConnection(params.source, params.target);
+          }
         }
-      }, [builderMode, setEdges, components]);
+      }, [builderMode, setEdges, components, onAddConnection]);
 
       // Node types for React Flow
       const nodeTypes = useMemo(() => ({
@@ -6459,7 +6972,9 @@ function getHtmlPage(): string {
       const [suggestions, setSuggestions] = useState([]);
       const [componentSpecs, setComponentSpecs] = useState({});
       const [selectedNode, setSelectedNode] = useState(null);
+      const [connectionDrafts, setConnectionDrafts] = useState({});
       const chatRef = useRef(null);
+      const specSyncTimerRef = useRef(null);
 
       // Builder mode state
       const [showTemplates, setShowTemplates] = useState(true);
@@ -6654,6 +7169,20 @@ function getHtmlPage(): string {
           setTemplates(data.templates || []);
         }).catch(() => {});
       }, []);
+
+      // Load dev mode conversation history on mount and when switching to dev mode
+      useEffect(() => {
+        if (canvasChatMode === 'dev') {
+          fetch('/api/agent/claude-code/history')
+            .then(r => r.json())
+            .then(history => {
+              if (Array.isArray(history) && history.length > 0) {
+                setDevMessages(history.map(h => ({ role: h.role, content: h.content })));
+              }
+            })
+            .catch(() => {});
+        }
+      }, [canvasChatMode]);
 
       // Fetch AI suggestions when architecture changes
       const fetchSuggestions = useCallback(() => {
@@ -7022,6 +7551,15 @@ function getHtmlPage(): string {
         setIsDevProcessing(false);
       };
 
+      const clearDevConversation = async () => {
+        try {
+          await fetch('/api/agent/claude-code/reset', { method: 'POST' });
+          setDevMessages([
+            { role: 'assistant', content: 'Claude Code connected. Send instructions to read, edit, and manage files in this project.\\n\\nExamples:\\n\\u2022 "Describe the architecture of this project"\\n\\u2022 "Add input validation to the API routes"\\n\\u2022 "Refactor the database queries to use prepared statements"' }
+          ]);
+        } catch {}
+      };
+
       // === Builder Mode Functions ===
 
       const loadTemplate = async (templateId) => {
@@ -7099,6 +7637,29 @@ function getHtmlPage(): string {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ from, to })
+        });
+        const data = await res.json();
+        if (data.architecture) {
+          setManualArch(data.architecture);
+          setIr(data.ir);
+        }
+      };
+
+      const updateConnectionContract = async (from, to, updates) => {
+        if (!from || !to) return;
+        const res = await fetch('/api/connection', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from,
+            to,
+            label: updates.label,
+            contract: {
+              sourceOutput: updates.sourceOutput,
+              targetInput: updates.targetInput,
+              notes: updates.notes,
+            },
+          })
         });
         const data = await res.json();
         if (data.architecture) {
@@ -7256,10 +7817,12 @@ function getHtmlPage(): string {
                 connections: arch.connections || []
               });
               // Extract specs from components
-              const specs = {};
-              arch.components.forEach(c => {
-                if (c.spec) specs[c.id] = c.spec;
-              });
+              const specs = data.project.componentSpecs || {};
+              if (Object.keys(specs).length === 0) {
+                arch.components.forEach(c => {
+                  if (c.spec) specs[c.id] = c.spec;
+                });
+              }
               setComponentSpecs(specs);
             } else {
               setManualArch(null);
@@ -7546,20 +8109,73 @@ function getHtmlPage(): string {
         setSelectedNode(null);
       };
 
+      const scheduleSpecSync = (nextSpecs) => {
+        if (specSyncTimerRef.current) {
+          clearTimeout(specSyncTimerRef.current);
+        }
+        specSyncTimerRef.current = setTimeout(() => {
+          fetch('/api/component-specs', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ componentSpecs: nextSpecs })
+          }).catch(() => {});
+        }, 300);
+      };
+
       const updateSpec = (field, value) => {
         if (!selectedNode) return;
-        setComponentSpecs(specs => ({
-          ...specs,
-          [selectedNode.id]: {
-            ...(specs[selectedNode.id] || {}),
-            [field]: value
-          }
-        }));
+        setComponentSpecs(specs => {
+          const nextSpecs = {
+            ...specs,
+            [selectedNode.id]: {
+              ...(specs[selectedNode.id] || {}),
+              [field]: value
+            }
+          };
+          scheduleSpecSync(nextSpecs);
+          return nextSpecs;
+        });
       };
 
       const getSpec = (field) => {
         if (!selectedNode) return '';
         return (componentSpecs[selectedNode.id] || {})[field] || '';
+      };
+
+      const connectionKey = (from, to) => from + '->' + to;
+
+      const getConnectionsForSelectedNode = () => {
+        if (!selectedNode || !manualArch) return [];
+        return (manualArch.connections || []).filter(conn =>
+          conn.from === selectedNode.id || conn.to === selectedNode.id
+        );
+      };
+
+      const getConnectionDraft = (conn) => {
+        const key = connectionKey(conn.from, conn.to);
+        return connectionDrafts[key] || {
+          label: conn.label || '',
+          sourceOutput: conn.contract?.sourceOutput || '',
+          targetInput: conn.contract?.targetInput || '',
+          notes: conn.contract?.notes || '',
+        };
+      };
+
+      const updateConnectionDraft = (conn, field, value) => {
+        const key = connectionKey(conn.from, conn.to);
+        setConnectionDrafts(prev => ({
+          ...prev,
+          [key]: {
+            ...(prev[key] || getConnectionDraft(conn)),
+            [field]: value,
+          }
+        }));
+      };
+
+      const saveConnectionDraft = async (conn) => {
+        const key = connectionKey(conn.from, conn.to);
+        const draft = connectionDrafts[key] || getConnectionDraft(conn);
+        await updateConnectionContract(conn.from, conn.to, draft);
       };
 
       const download = () => {
@@ -7571,6 +8187,9 @@ function getHtmlPage(): string {
       };
 
       const downloadDesign = () => {
+        const inferredConnections = (ir?.components || []).flatMap(c =>
+          (c.connections || []).map(to => ({ from: c.id, to }))
+        );
         const design = {
           name: ir?.name || 'architecture',
           components: (ir?.components || []).map(c => ({
@@ -7579,7 +8198,8 @@ function getHtmlPage(): string {
             type: c.type,
             connections: c.connections || [],
             spec: componentSpecs[c.id] || {}
-          }))
+          })),
+          connections: manualArch?.connections || inferredConnections
         };
         const blob = new Blob([JSON.stringify(design, null, 2)], { type: 'application/json' });
         const a = document.createElement('a');
@@ -7602,6 +8222,28 @@ function getHtmlPage(): string {
       const [sourceFiles, setSourceFiles] = useState([]);
       const [fileSource, setFileSource] = useState('generated'); // 'generated' | 'source'
       const editorRef = useRef(null);
+
+      useEffect(() => {
+        const drafts = {};
+        (manualArch?.connections || []).forEach(conn => {
+          const key = conn.from + '->' + conn.to;
+          drafts[key] = {
+            label: conn.label || '',
+            sourceOutput: conn.contract?.sourceOutput || '',
+            targetInput: conn.contract?.targetInput || '',
+            notes: conn.contract?.notes || '',
+          };
+        });
+        setConnectionDrafts(drafts);
+      }, [manualArch]);
+
+      useEffect(() => {
+        return () => {
+          if (specSyncTimerRef.current) {
+            clearTimeout(specSyncTimerRef.current);
+          }
+        };
+      }, []);
 
       // Load source files from filesystem
       useEffect(() => {
@@ -7632,7 +8274,7 @@ function getHtmlPage(): string {
           const res = await fetch('/api/generate-code', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ componentSpecs })
+            body: JSON.stringify({ componentSpecs, strategy: 'targeted_edit' })
           });
 
           const reader = res.body.getReader();
@@ -9092,8 +9734,16 @@ function getHtmlPage(): string {
               },
               placeholder: 'Tell Claude Code what to build...', rows: 2, disabled: isDevProcessing
             }),
-            React.createElement('button', { className: 'primary', onClick: () => sendDevMessage(), disabled: isDevProcessing, style: { width: '100%' } },
-              isDevProcessing ? 'Running...' : 'Send to Claude Code'
+            React.createElement('div', { style: { display: 'flex', gap: '8px' } },
+              React.createElement('button', { className: 'primary', onClick: () => sendDevMessage(), disabled: isDevProcessing, style: { flex: 1 } },
+                isDevProcessing ? 'Running...' : 'Send to Claude Code'
+              ),
+              React.createElement('button', {
+                onClick: clearDevConversation,
+                disabled: isDevProcessing,
+                title: 'Clear conversation and start fresh',
+                style: { padding: '8px 12px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '12px' }
+              }, 'Clear')
             )
           )
         ),
@@ -9232,6 +9882,7 @@ function getHtmlPage(): string {
                 onNodeDrag: builderMode ? updateComponent : null,
                 connectingFrom,
                 onStartConnect: builderMode ? startConnecting : null,
+                onAddConnection: builderMode ? addConnection : null,
                 onDeleteNode: builderMode ? deleteComponent : null,
                 onDeleteConnection: builderMode ? deleteConnection : null,
                 builderMode,
@@ -9566,6 +10217,87 @@ function getHtmlPage(): string {
                   )
                 ),
                 React.createElement('div', { className: 'spec-hint' }, 'What does this component return or emit?')
+              ),
+              React.createElement('div', { className: 'spec-section' },
+                React.createElement('div', { className: 'spec-label' },
+                  React.createElement('span', { className: 'spec-label-icon' }, '🔗'),
+                  'Connection Data Contracts'
+                ),
+                getConnectionsForSelectedNode().length === 0
+                  ? React.createElement('div', { className: 'spec-hint' }, 'No inbound or outbound connections yet.')
+                  : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+                      getConnectionsForSelectedNode().map((conn, idx) => {
+                        const draft = getConnectionDraft(conn);
+                        const isOutgoing = conn.from === selectedNode.id;
+                        return React.createElement('div', {
+                          key: conn.from + '-' + conn.to + '-' + idx,
+                          style: {
+                            border: '1px solid var(--border-color)',
+                            borderRadius: 10,
+                            padding: 10,
+                            background: 'var(--bg-card)'
+                          }
+                        },
+                          React.createElement('div', {
+                            style: {
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              marginBottom: 8
+                            }
+                          },
+                            React.createElement('div', { style: { fontSize: 12, fontWeight: 600 } }, conn.from + ' → ' + conn.to),
+                            React.createElement('span', {
+                              style: {
+                                fontSize: 10,
+                                color: isOutgoing ? '#0EA5E9' : '#8B5CF6',
+                                background: (isOutgoing ? '#0EA5E9' : '#8B5CF6') + '20',
+                                padding: '2px 8px',
+                                borderRadius: 999
+                              }
+                            }, isOutgoing ? 'Outgoing' : 'Incoming')
+                          ),
+                          React.createElement('input', {
+                            type: 'text',
+                            value: draft.label || '',
+                            onChange: e => updateConnectionDraft(conn, 'label', e.target.value),
+                            placeholder: 'Connection label (e.g., webhooks, sync events)',
+                            style: {
+                              width: '100%',
+                              marginBottom: 8,
+                              padding: '6px 8px',
+                              borderRadius: 6,
+                              border: '1px solid var(--border-color)',
+                              fontSize: 12
+                            }
+                          }),
+                          React.createElement('textarea', {
+                            value: draft.sourceOutput || '',
+                            onChange: e => updateConnectionDraft(conn, 'sourceOutput', e.target.value),
+                            placeholder: 'Source output contract sent on this edge',
+                            style: { width: '100%', minHeight: 64, marginBottom: 8 }
+                          }),
+                          React.createElement('textarea', {
+                            value: draft.targetInput || '',
+                            onChange: e => updateConnectionDraft(conn, 'targetInput', e.target.value),
+                            placeholder: 'Target input contract expected on this edge',
+                            style: { width: '100%', minHeight: 64, marginBottom: 8 }
+                          }),
+                          React.createElement('textarea', {
+                            value: draft.notes || '',
+                            onChange: e => updateConnectionDraft(conn, 'notes', e.target.value),
+                            placeholder: 'Protocol, validation rules, retry semantics, ordering guarantees...',
+                            style: { width: '100%', minHeight: 56, marginBottom: 8 }
+                          }),
+                          React.createElement('button', {
+                            className: 'secondary',
+                            onClick: () => saveConnectionDraft(conn),
+                            style: { width: '100%' }
+                          }, 'Save Connection Contract')
+                        );
+                      })
+                    ),
+                React.createElement('div', { className: 'spec-hint' }, 'Define the exact payload this edge sends and receives; BAC will enforce it as contract-of-record.')
               ),
               React.createElement('div', { className: 'spec-divider' }),
               React.createElement('div', { className: 'spec-section' },

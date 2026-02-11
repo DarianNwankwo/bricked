@@ -84,6 +84,8 @@ brick create <description> [options]
 |--------|---------|-------------|
 | `-o, --output <file>` | `appspec.yaml` | Output file path for the AppSpec |
 | `-d, --diagram <file>` | - | Also save the generated Mermaid diagram |
+| `-f, --description-file <file>` | - | Read the app/vertical description from a file |
+| `--bac-output <file>` | - | Also save a derived Brick App Contract (BAC) JSON file |
 | `-y, --yes` | `false` | Skip confirmation prompts |
 
 ### Examples
@@ -97,13 +99,29 @@ brick create "An e-commerce site with React and a Python API" \
   -o shop.yaml \
   -d shop.mmd
 
+# Read vertical description from file
+brick create \
+  --description-file ./verticals/coach.md \
+  -o coach.yaml \
+  --bac-output coach.bac.json
+
+# Combine short prompt + file context
+brick create "Prioritize coach CRM workflows" \
+  --description-file ./verticals/coach.md \
+  -o coach.yaml
+
+# Save AppSpec + BAC
+brick create "Coach CRM with AI copilot" \
+  -o coach.yaml \
+  --bac-output coach.bac.json
+
 # Skip confirmation
 brick create "Simple static website" -y
 ```
 
 ### Requirements
 
-- `ANTHROPIC_API_KEY` environment variable must be set
+- One LLM key must be set: `OPENROUTER_API_KEY` (preferred), `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`
 - Internet connection for API calls
 
 ---
@@ -121,6 +139,7 @@ brick chat [options]
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-o, --output <file>` | `appspec.yaml` | Output file path when building |
+| `--bac-output <file>` | - | Also save a derived Brick App Contract (BAC) JSON file on `/build` |
 
 ### Interactive Commands
 

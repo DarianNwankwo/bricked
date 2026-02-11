@@ -1,16 +1,23 @@
 /**
- * Claude Code CLI Integration
+ * Claude Code CLI Integration — Persistent Process Model
  *
- * Wraps the Claude Code CLI as a child process, streaming structured events
- * back to the browser via SSE. Used by the Canvas chat panel in Dev mode.
+ * Maintains a single long-lived Claude Code process that communicates via
+ * bidirectional stdio pipes (proc.stdin / proc.stdout). The process stays
+ * alive across messages using --input-format stream-json, so Claude retains
+ * full conversation context without needing --resume.
  *
- * Sessions persist across messages — the first invocation creates a session,
- * subsequent invocations resume it with --resume so Claude Code has full
- * conversation context.
+ * Architecture:
+ *   Browser <--SSE--> HTTP Server <--stdio pipes--> Claude Code (persistent)
+ *       proc.stdin.write()   → user messages (NDJSON)
+ *       proc.stdout (readline) ← assistant responses (NDJSON)
  */
 
 import { spawn, type ChildProcess } from 'child_process';
-import { createInterface } from 'readline';
+import { createInterface, type Interface as ReadlineInterface } from 'readline';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface ClaudeCodeEvent {
   type: 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'done';
@@ -21,39 +28,218 @@ export interface ClaudeCodeEvent {
   summary?: { filesChanged: string[]; duration: number };
 }
 
-let activeProcess: ChildProcess | null = null;
-let currentSessionId: string | null = null;
+export interface ConversationEntry {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+}
 
-export async function* executeClaudeCode(
-  instruction: string,
-  cwd: string
-): AsyncGenerator<ClaudeCodeEvent> {
-  if (activeProcess) {
-    yield { type: 'error', content: 'A Claude Code process is already running. Cancel it first.' };
-    return;
+// ---------------------------------------------------------------------------
+// Module-level state
+// ---------------------------------------------------------------------------
+
+let persistentProcess: ChildProcess | null = null;
+let sessionId: string | null = null;
+let outputReader: ReadlineInterface | null = null;
+let cwdPath: string | null = null;
+let isProcessing = false;
+
+const conversationHistory: ConversationEntry[] = [];
+
+// Buffer for stdout lines that arrive between turns. The readline 'line'
+// listener pushes here; sendMessage drains it.
+let lineBuffer: string[] = [];
+let lineResolve: ((line: string) => void) | null = null;
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+function onStdoutLine(line: string): void {
+  if (lineResolve) {
+    const resolve = lineResolve;
+    lineResolve = null;
+    resolve(line);
+  } else {
+    lineBuffer.push(line);
+  }
+}
+
+/** Returns the next line from stdout, waiting if necessary. */
+function nextLine(): Promise<string> {
+  if (lineBuffer.length > 0) {
+    return Promise.resolve(lineBuffer.shift()!);
+  }
+  return new Promise<string>((resolve) => {
+    lineResolve = resolve;
+  });
+}
+
+/** Returns the next line, or rejects after `ms` milliseconds. */
+function nextLineWithTimeout(ms: number): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      // Remove pending resolve so it doesn't fire later
+      lineResolve = null;
+      reject(new Error(`Timed out waiting for Claude response after ${ms / 1000}s`));
+    }, ms);
+
+    nextLine().then((line) => {
+      clearTimeout(timer);
+      resolve(line);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Process lifecycle
+// ---------------------------------------------------------------------------
+
+function ensureProcess(cwd: string): void {
+  if (persistentProcess && persistentProcess.exitCode === null) {
+    return; // already alive
   }
 
-  const filesChanged = new Set<string>();
-  const startTime = Date.now();
+  // Clean up stale state
+  cleanup();
 
-  // Build args: resume existing session or start fresh
-  const args = ['-p', instruction, '--output-format', 'stream-json', '--verbose'];
-  if (currentSessionId) {
-    args.push('--resume', currentSessionId);
-  }
+  const args = [
+    '-p',
+    '--input-format', 'stream-json',
+    '--output-format', 'stream-json',
+    '--verbose',
+  ];
 
   const proc = spawn('claude', args, {
     cwd,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env },
   });
 
-  activeProcess = proc;
+  persistentProcess = proc;
+  cwdPath = cwd;
 
+  // Line-based reader on stdout
   const rl = createInterface({ input: proc.stdout! });
+  outputReader = rl;
+
+  rl.on('line', onStdoutLine);
+
+  // Detect unexpected death
+  proc.on('exit', (code) => {
+    if (persistentProcess === proc) {
+      persistentProcess = null;
+      outputReader = null;
+      isProcessing = false;
+      // Reject any pending line read
+      if (lineResolve) {
+        const resolve = lineResolve;
+        lineResolve = null;
+        // We can't reject a resolve, so push a synthetic error line
+        lineBuffer.push(JSON.stringify({
+          type: '__process_exit',
+          code,
+        }));
+        resolve(lineBuffer.shift()!);
+      }
+    }
+  });
+
+  // Kill child when the server exits
+  const onParentExit = () => {
+    if (proc.exitCode === null) {
+      proc.kill('SIGTERM');
+    }
+  };
+  process.on('exit', onParentExit);
+  proc.on('exit', () => {
+    process.removeListener('exit', onParentExit);
+  });
+
+  // Drain stderr to prevent back-pressure blocking
+  proc.stderr?.resume();
+}
+
+function cleanup(): void {
+  if (outputReader) {
+    outputReader.removeAllListeners();
+    outputReader.close();
+    outputReader = null;
+  }
+  if (persistentProcess && persistentProcess.exitCode === null) {
+    persistentProcess.kill('SIGTERM');
+  }
+  persistentProcess = null;
+  sessionId = null;
+  lineBuffer = [];
+  lineResolve = null;
+  isProcessing = false;
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a message to the persistent Claude Code process and yield events
+ * as they stream back. Spawns the process on first call.
+ */
+export async function* sendMessage(
+  instruction: string,
+  cwd: string
+): AsyncGenerator<ClaudeCodeEvent> {
+  if (isProcessing) {
+    yield { type: 'error', content: 'A message is already being processed. Wait or cancel first.' };
+    return;
+  }
+
+  isProcessing = true;
+
+  const filesChanged = new Set<string>();
+  const startTime = Date.now();
+  let fullAssistantText = '';
 
   try {
-    for await (const line of rl) {
+    ensureProcess(cwd);
+
+    // Record user message in history
+    conversationHistory.push({
+      role: 'user',
+      content: instruction,
+      timestamp: Date.now(),
+    });
+
+    // Write NDJSON message to Claude's stdin
+    const stdinMessage = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: instruction },
+      session_id: sessionId || 'default',
+      parent_tool_use_id: null,
+    });
+
+    if (!persistentProcess?.stdin?.writable) {
+      yield { type: 'error', content: 'Claude process stdin is not writable' };
+      isProcessing = false;
+      return;
+    }
+
+    persistentProcess.stdin.write(stdinMessage + '\n');
+
+    // Read response events until we get a 'result' event (turn complete)
+    const MESSAGE_TIMEOUT = 120_000; // 2 minutes per line
+    let turnComplete = false;
+
+    while (!turnComplete) {
+      let line: string;
+      try {
+        line = await nextLineWithTimeout(MESSAGE_TIMEOUT);
+      } catch {
+        yield { type: 'error', content: 'Timed out waiting for Claude response. The process may be hung.' };
+        // Kill and allow respawn on next message
+        cleanup();
+        break;
+      }
+
       if (!line.trim()) continue;
 
       let event: Record<string, unknown>;
@@ -65,11 +251,16 @@ export async function* executeClaudeCode(
 
       const eventType = event.type as string;
 
+      // Detect synthetic process exit event
+      if (eventType === '__process_exit') {
+        yield { type: 'error', content: `Claude process exited unexpectedly (code ${event.code})` };
+        break;
+      }
+
       if (eventType === 'system') {
-        // Capture session ID for future --resume calls
-        const sessionId = event.session_id as string | undefined;
-        if (sessionId) {
-          currentSessionId = sessionId;
+        const sid = event.session_id as string | undefined;
+        if (sid) {
+          sessionId = sid;
         }
         continue;
       }
@@ -82,7 +273,9 @@ export async function* executeClaudeCode(
 
         for (const block of content) {
           if (block.type === 'text') {
-            yield { type: 'text', content: block.text as string };
+            const text = block.text as string;
+            fullAssistantText += text;
+            yield { type: 'text', content: text };
           } else if (block.type === 'tool_use') {
             const toolName = block.name as string;
             const input = block.input as Record<string, unknown> | undefined;
@@ -104,7 +297,7 @@ export async function* executeClaudeCode(
       }
 
       if (eventType === 'user') {
-        // tool_result messages — extract file info from tool_use_result
+        // tool_result messages
         const toolResult = event.tool_use_result as Record<string, unknown> | undefined;
         if (toolResult?.filePath) {
           filesChanged.add(toolResult.filePath as string);
@@ -113,6 +306,17 @@ export async function* executeClaudeCode(
       }
 
       if (eventType === 'result') {
+        turnComplete = true;
+
+        // Record assistant response in history
+        if (fullAssistantText) {
+          conversationHistory.push({
+            role: 'assistant',
+            content: fullAssistantText,
+            timestamp: Date.now(),
+          });
+        }
+
         const duration = Date.now() - startTime;
         yield {
           type: 'done',
@@ -121,45 +325,52 @@ export async function* executeClaudeCode(
             duration,
           },
         };
-        continue;
       }
     }
   } catch (err) {
-    // Stream closed or process error
-    if (activeProcess === proc) {
-      yield { type: 'error', content: `Stream error: ${(err as Error).message}` };
-    }
-  }
-
-  // Wait for process exit
-  const exitCode = await new Promise<number | null>((resolve) => {
-    if (proc.exitCode !== null) {
-      resolve(proc.exitCode);
-    } else {
-      proc.on('exit', (code) => resolve(code));
-    }
-  });
-
-  if (activeProcess === proc) {
-    activeProcess = null;
-  }
-
-  if (exitCode !== null && exitCode !== 0) {
-    yield { type: 'error', content: `Claude Code exited with code ${exitCode}` };
+    yield { type: 'error', content: `Error: ${(err as Error).message}` };
+  } finally {
+    isProcessing = false;
   }
 }
 
-export function cancelClaudeCode(): boolean {
-  if (!activeProcess) return false;
-  activeProcess.kill('SIGTERM');
-  activeProcess = null;
+/**
+ * Cancel the current in-flight request. Since we can't cancel a single
+ * turn in stream-json mode, this kills the process. It will respawn
+ * automatically on the next sendMessage call.
+ */
+export function cancelCurrentRequest(): boolean {
+  if (!persistentProcess) return false;
+  cleanup();
   return true;
 }
 
-export function resetSession(): void {
-  currentSessionId = null;
+/** Get the full conversation history. */
+export function getConversationHistory(): ConversationEntry[] {
+  return [...conversationHistory];
 }
 
-export function getSessionId(): string | null {
-  return currentSessionId;
+/** Clear conversation history, kill the persistent process, and reset all state. */
+export function clearConversation(): void {
+  cleanup();
+  conversationHistory.length = 0;
 }
+
+/** Reset session (clears everything). */
+export function resetSession(): void {
+  clearConversation();
+}
+
+/** Get the current session ID. */
+export function getSessionId(): string | null {
+  return sessionId;
+}
+
+/** Check if the persistent process is alive. */
+export function isAlive(): boolean {
+  return persistentProcess !== null && persistentProcess.exitCode === null;
+}
+
+// Legacy exports for backward compatibility during migration
+export const executeClaudeCode = sendMessage;
+export const cancelClaudeCode = cancelCurrentRequest;
