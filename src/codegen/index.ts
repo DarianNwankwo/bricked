@@ -1,10 +1,12 @@
 export { planCodeStructure, type FilePlan, type CodePlan, type Component } from './planner.js';
 export {
   generateFile,
+  editFile,
   generateFileStream,
   generateAllFiles,
   type GeneratedFile,
   type GenerateFileParams,
+  type EditFileParams,
   type GenerateAllParams,
 } from './generator.js';
 export {

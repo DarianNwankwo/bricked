@@ -5,125 +5,125 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![DigitalOcean](https://img.shields.io/badge/Deploy-DigitalOcean-0080FF)](https://www.digitalocean.com/products/app-platform)
 
-**Translate natural language or Mermaid diagrams into deployed DigitalOcean infrastructure.**
+Brick is an AI-powered CLI and UI for turning intent into deployable architecture and code artifacts.
 
-Brick is an AI-powered CLI that transforms architecture diagrams into production-ready DigitalOcean App Platform deployments. Describe your infrastructure in plain English or draw it with Mermaid, and Brick handles the rest.
-
-```
-$ brick create "A blog with Next.js and PostgreSQL"
-
-Generated Architecture:
-
-flowchart TD
-    A[Next.js App] --> B[(PostgreSQL)]
-
-AppSpec written to appspec.yaml
-
-$ brick deploy appspec.yaml
-Deploying to DigitalOcean...
-App URL: https://blog-app-xxxxx.ondigitalocean.app
-```
+Current implementation direction is **BAC-first**:
+- BAC (Brick App Contract) is the canonical contract layer.
+- OpenRouter is the default model router.
+- Targeted file edits are the default update strategy.
+- BAC includes explicit node and edge contracts (`systemContracts.nodes`, `systemContracts.edges`).
 
 ## Quick Start
 
-### Installation
+### Prerequisites
+- Node.js 18+
+- [doctl](https://docs.digitalocean.com/reference/doctl/) installed/authenticated for deployment
+- One LLM API key: `OPENROUTER_API_KEY` (preferred), `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`
 
+### Environment Setup
+Brick now auto-loads `.env` and `.env.local` from project root on CLI startup.
+
+Example `.env`:
 ```bash
-npm install -g brick-cli
+OPENROUTER_API_KEY=your_key_here
+BRICK_MODEL=anthropic/claude-sonnet-4
 ```
 
-### Prerequisites
+### Install and Run
+```bash
+npm install
+npm run dev -- create "A React app with API and PostgreSQL" -o appspec.yaml -y
+```
 
-- Node.js 18+
-- [doctl](https://docs.digitalocean.com/reference/doctl/) (DigitalOcean CLI) installed and authenticated
-- An Anthropic API key for AI features
+## BAC Workflow
 
-### Your First Deployment
+Generate AppSpec + Mermaid + BAC from inline prompt:
+```bash
+npm run dev -- create "AI-native coaching platform with CRM and booking" \
+  -o /tmp/coach.appspec.yaml \
+  -d /tmp/coach.mmd \
+  --bac-output /tmp/coach.bac.json \
+  -y
+```
 
-1. **Create from natural language:**
-   ```bash
-   brick create "A React frontend with a Node.js API and PostgreSQL database"
-   ```
+Generate from a vertical description file:
+```bash
+npm run dev -- create \
+  --description-file ./coach_vertical.md \
+  -o /tmp/coach.appspec.yaml \
+  -d /tmp/coach.mmd \
+  --bac-output /tmp/coach.bac.json \
+  -y
+```
 
-2. **Or build from a Mermaid diagram:**
-   ```bash
-   brick build architecture.mmd -o appspec.yaml
-   ```
+Quick BAC contract check:
+```bash
+cat /tmp/coach.bac.json | jq '{nodes: .systemContracts.nodes|length, edges: .systemContracts.edges|length}'
+```
 
-3. **Deploy to DigitalOcean:**
-   ```bash
-   brick deploy appspec.yaml
-   ```
+## UI Contract Editing
 
-## Features
+Launch UI:
+```bash
+npm run dev -- ui
+```
 
-- **AI-Powered Design** - Describe your app in plain English and get a complete architecture
-- **Mermaid Diagrams** - Use visual flowcharts to define infrastructure
-- **Interactive Mode** - Refine your architecture through conversation
-- **Cost Estimation** - See estimated monthly costs before deploying
-- **Validation** - Catch configuration errors before deployment
-- **Visual UI** - Browser-based architecture editor with drag-and-drop
-- **Platform Server** - Full API server for team collaboration
+In builder mode:
+- Click a node to edit:
+  - description
+  - input contract
+  - output contract
+  - implementation notes
+- In the same panel, edit **Connection Data Contracts** for inbound/outbound edges:
+  - edge label
+  - source output contract
+  - target input contract
+  - notes
 
-## CLI Commands
+These edits are synced to BAC through:
+- `PUT /api/component-specs`
+- `PUT /api/connection`
+
+BAC endpoints:
+- `GET /api/bac`
+- `PUT /api/bac`
+
+## Key Commands
 
 | Command | Description |
 |---------|-------------|
-| `brick create <description>` | Generate infrastructure from natural language |
+| `brick create [description]` | Generate architecture from text and/or `--description-file` |
 | `brick build <diagram.mmd>` | Compile Mermaid diagram to AppSpec YAML |
-| `brick chat` | Interactive mode to design and refine architecture |
-| `brick deploy <appspec.yaml>` | Deploy to DigitalOcean App Platform |
-| `brick validate <appspec.yaml>` | Validate an AppSpec file |
+| `brick chat` | Interactive architecture design (`/build` can output BAC) |
 | `brick ui` | Launch visual architecture editor |
-| `brick server` | Start the platform API server |
+| `brick deploy <appspec.yaml>` | Deploy to DigitalOcean App Platform |
+| `brick validate <appspec.yaml>` | Validate AppSpec |
+| `brick server` | Start backend API server |
 
-See the [CLI Reference](docs/cli-reference.md) for detailed options.
+See `docs/cli-reference.md` for full options.
 
-## Mermaid Diagram Syntax
-
-Brick uses Mermaid flowchart syntax with shape conventions to infer component types:
-
-```mermaid
-flowchart TD
-    %% brick:name=my-saas
-    A([React SPA]) --> B[User API]
-    A --> C[Payment API]
-    B --> D[(PostgreSQL)]
-    C --> D
-    B --> E[(Redis)]
-```
+## Mermaid Shape Conventions
 
 | Shape | Component Type |
-|-------|---------------|
-| `[Rectangle]` | Service (HTTP workload) |
-| `([Stadium])` | Static Site (frontend) |
+|-------|----------------|
+| `[Rectangle]` | Service |
+| `([Stadium])` | Static Site |
 | `[(Cylinder)]` | Database |
-| `((Circle))` | Worker (background process) |
-| `{{Hexagon}}` | Job (scheduled task) |
+| `((Circle))` | Worker |
+| `{{Hexagon}}` | Job |
+
+## Known Gaps
+
+- `brick create` currently may emit valid but unlabeled Mermaid edges; edge contract details are richer in BAC/UI than in raw generated diagram text.
+- BAC compiler as strict source of truth (`BAC -> graph -> IR -> code`) is in progress; current flow still includes Mermaid-first paths.
 
 ## Documentation
 
-- [Getting Started](docs/getting-started.md) - Installation and first deployment
-- [CLI Reference](docs/cli-reference.md) - All commands and options
-- [Architecture](docs/architecture.md) - How Brick works internally
-- [Examples](docs/examples.md) - Common architecture patterns
-
-## Supported Infrastructure
-
-**Compute:**
-- Services (HTTP APIs, web servers)
-- Static Sites (React, Vue, Next.js, Hugo)
-- Workers (background processors)
-- Jobs (scheduled tasks, migrations)
-
-**Data:**
-- PostgreSQL
-- MySQL
-- Redis
-- MongoDB
-
-**Regions:**
-nyc, sfo, ams, sgp, lon, fra, tor, blr, syd
+- `docs/getting-started.md`
+- `docs/cli-reference.md`
+- `docs/architecture.md`
+- `docs/architecture-decisions.md`
+- `docs/examples.md`
 
 ## License
 

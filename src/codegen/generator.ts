@@ -1,5 +1,5 @@
 import { chat, chatStream, type ChatMessage } from '../llm/client.js';
-import { CODE_GENERATOR_PROMPT, formatComponentForPrompt } from './prompts.js';
+import { CODE_EDIT_PROMPT, CODE_GENERATOR_PROMPT, formatComponentForPrompt } from './prompts.js';
 import type { LLMConfig } from '../llm/config.js';
 import type { FilePlan, Component } from './planner.js';
 
@@ -15,6 +15,11 @@ export interface GenerateFileParams {
   components: Component[];
   existingFiles: Map<string, string>;
   config?: LLMConfig;
+}
+
+export interface EditFileParams extends GenerateFileParams {
+  existingContent: string;
+  editRequest: string;
 }
 
 export async function generateFile(params: GenerateFileParams): Promise<GeneratedFile> {
@@ -40,6 +45,68 @@ export async function generateFile(params: GenerateFileParams): Promise<Generate
   const response = await chat(CODE_GENERATOR_PROMPT, messages, config);
 
   // Clean up the response - remove markdown code blocks if present
+  let content = response.content.trim();
+  if (content.startsWith('```')) {
+    content = content.replace(/```\w*\n?/g, '').replace(/```$/g, '').trim();
+  }
+
+  return {
+    path: file.path,
+    content,
+    componentId: file.componentId,
+    generatedAt: new Date(),
+  };
+}
+
+export async function editFile(params: EditFileParams): Promise<GeneratedFile> {
+  const {
+    file,
+    components,
+    existingFiles,
+    existingContent,
+    editRequest,
+    config,
+  } = params;
+
+  const component = file.componentId
+    ? components.find(c => c.id === file.componentId)
+    : null;
+
+  const dependencyContext = file.dependencies
+    .filter(dep => existingFiles.has(dep))
+    .map(dep => `// ${dep}\n${existingFiles.get(dep)?.slice(0, 500)}...`)
+    .join('\n\n');
+
+  let prompt = `Edit the file: ${file.path}
+Purpose: ${file.purpose}
+Edit request: ${editRequest}
+`;
+
+  if (component) {
+    prompt += `
+Component context:
+${formatComponentForPrompt(component)}
+`;
+  }
+
+  if (dependencyContext) {
+    prompt += `
+Related files for context:
+${dependencyContext}
+`;
+  }
+
+  prompt += `
+Current file content:
+${existingContent}
+`;
+
+  const messages: ChatMessage[] = [
+    { role: 'user', content: prompt }
+  ];
+
+  const response = await chat(CODE_EDIT_PROMPT, messages, config);
+
   let content = response.content.trim();
   if (content.startsWith('```')) {
     content = content.replace(/```\w*\n?/g, '').replace(/```$/g, '').trim();
