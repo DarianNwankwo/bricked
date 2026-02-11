@@ -1,0 +1,7 @@
+flowchart TD
+    %% brick:name=ecommerce
+    A([React SPA]) --> B[User API]
+    A --> C[Order API]
+    A --> D[Product API]
+    B & C & D --> E[(PostgreSQL)]
+    C --> F[(Redis)]

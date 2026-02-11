@@ -1,0 +1,6 @@
+flowchart TD
+    %% brick:name=processor
+    A[API] --> B[(Redis)]
+    B --> C((Email Worker))
+    B --> D((PDF Worker))
+    C & D --> E[(PostgreSQL)]

@@ -1,0 +1,1148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brick - Vibe Deploy Your Infrastructure</title>
+  <meta name="description" content="Describe your architecture in plain English. See real-time costs. Deploy to production in minutes. No Terraform. No Kubernetes. Just ship.">
+  <meta name="keywords" content="infrastructure, deployment, cloud, DigitalOcean, AI, no-code, DevOps">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Brick - Vibe Deploy Your Infrastructure">
+  <meta property="og:description" content="Your idea. Running in production. Before lunch.">
+  <meta property="og:type" content="website">
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-primary: #0A0A0A;
+      --bg-secondary: #111111;
+      --bg-tertiary: #1A1A1A;
+      --bg-card: #141414;
+      --border-color: #262626;
+      --border-hover: #404040;
+      --text-primary: #FAFAFA;
+      --text-secondary: #A1A1AA;
+      --text-muted: #71717A;
+      --accent-primary: #6366F1;
+      --accent-secondary: #8B5CF6;
+      --accent-gradient: linear-gradient(135deg, #6366F1, #8B5CF6);
+      --success: #22C55E;
+      --warning: #F59E0B;
+      --error: #EF4444;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* Navigation */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 1rem 2rem;
+      background: rgba(10, 10, 10, 0.8);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .nav-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 800;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.02em;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 2rem;
+      align-items: center;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover {
+      color: var(--text-primary);
+    }
+
+    .nav-cta {
+      background: var(--accent-gradient);
+      color: white !important;
+      padding: 0.5rem 1.25rem;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+
+    .nav-cta:hover {
+      opacity: 0.9;
+    }
+
+    /* Hero Section */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 8rem 2rem 4rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 150%;
+      height: 100%;
+      background: radial-gradient(ellipse at center top, rgba(99, 102, 241, 0.15) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 100px;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      margin-bottom: 2rem;
+    }
+
+    .hero-badge span {
+      color: var(--accent-primary);
+      font-weight: 600;
+    }
+
+    .hero h1 {
+      font-size: clamp(3rem, 8vw, 5.5rem);
+      font-weight: 800;
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+      margin-bottom: 1.5rem;
+      max-width: 900px;
+    }
+
+    .hero h1 .gradient {
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-subtitle {
+      font-size: 1.35rem;
+      color: var(--text-secondary);
+      max-width: 600px;
+      margin-bottom: 0.75rem;
+      line-height: 1.5;
+    }
+
+    .hero-tagline {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      margin-bottom: 2.5rem;
+      font-family: var(--font-mono);
+    }
+
+    .hero-ctas {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 1rem 2rem;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--accent-gradient);
+      color: white;
+      box-shadow: 0 4px 24px rgba(99, 102, 241, 0.4);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 32px rgba(99, 102, 241, 0.5);
+    }
+
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--border-hover);
+      background: var(--bg-card);
+    }
+
+    /* Anti-DevOps Banner */
+    .anti-banner {
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
+      padding: 1.5rem 2rem;
+      text-align: center;
+    }
+
+    .anti-banner p {
+      font-family: var(--font-mono);
+      font-size: 1rem;
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+    }
+
+    .anti-banner .strike {
+      text-decoration: line-through;
+      color: var(--error);
+      opacity: 0.7;
+    }
+
+    .anti-banner .highlight {
+      color: var(--success);
+      font-weight: 600;
+    }
+
+    /* Flow Section */
+    .flow-section {
+      padding: 6rem 2rem;
+      background: var(--bg-primary);
+    }
+
+    .section-container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    .section-header h2 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 1rem;
+    }
+
+    .section-header p {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    .flow-visual {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 4rem;
+    }
+
+    .flow-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    .flow-box-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent-primary);
+      margin-bottom: 0.75rem;
+    }
+
+    .flow-box-content {
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    .flow-box.highlight {
+      border-color: var(--accent-primary);
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1));
+    }
+
+    .flow-box.highlight .flow-box-content {
+      color: var(--text-primary);
+    }
+
+    .flow-arrow {
+      color: var(--text-muted);
+      font-size: 1.5rem;
+    }
+
+    /* Three Ways */
+    .ways-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .way-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 2rem;
+      transition: all 0.3s;
+    }
+
+    .way-card:hover {
+      border-color: var(--accent-primary);
+      transform: translateY(-4px);
+    }
+
+    .way-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--accent-gradient);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .way-card h3 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .way-card p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+    }
+
+    /* Demo Section */
+    .demo-section {
+      padding: 6rem 2rem;
+      background: var(--bg-secondary);
+    }
+
+    .demo-container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .demo-window {
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+
+    .demo-header {
+      padding: 1rem 1.5rem;
+      background: var(--bg-tertiary);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .demo-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .demo-dot.red { background: #EF4444; }
+    .demo-dot.yellow { background: #F59E0B; }
+    .demo-dot.green { background: #22C55E; }
+
+    .demo-content {
+      padding: 2rem;
+    }
+
+    .demo-message {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .demo-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--bg-tertiary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+
+    .demo-avatar.brick {
+      background: var(--accent-gradient);
+    }
+
+    .demo-bubble {
+      flex: 1;
+    }
+
+    .demo-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    .demo-text {
+      background: var(--bg-tertiary);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    .demo-diagram {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      white-space: pre;
+      line-height: 1.8;
+      margin-top: 0.75rem;
+    }
+
+    .demo-cost {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      margin-top: 0.75rem;
+    }
+
+    .demo-cost-label {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    .demo-cost-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--success);
+    }
+
+    .demo-buttons {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .demo-btn {
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+    }
+
+    .demo-btn-primary {
+      background: var(--accent-gradient);
+      color: white;
+    }
+
+    .demo-btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+
+    /* Comparison Section */
+    .compare-section {
+      padding: 6rem 2rem;
+      background: var(--bg-primary);
+    }
+
+    .compare-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .compare-col {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 2rem;
+    }
+
+    .compare-col.bad {
+      opacity: 0.7;
+    }
+
+    .compare-col.good {
+      border-color: var(--accent-primary);
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.05), rgba(139, 92, 246, 0.05));
+    }
+
+    .compare-header {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .compare-header.bad { color: var(--error); }
+    .compare-header.good { color: var(--success); }
+
+    .compare-list {
+      list-style: none;
+    }
+
+    .compare-list li {
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--border-color);
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .compare-list li:last-child {
+      border-bottom: none;
+    }
+
+    .compare-num {
+      width: 24px;
+      height: 24px;
+      background: var(--bg-tertiary);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .compare-col.good .compare-num {
+      background: rgba(34, 197, 94, 0.2);
+      color: var(--success);
+    }
+
+    .compare-time {
+      margin-top: 1.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border-color);
+      font-family: var(--font-mono);
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+
+    .compare-col.bad .compare-time { color: var(--error); }
+    .compare-col.good .compare-time { color: var(--success); }
+
+    /* Cost Section */
+    .cost-section {
+      padding: 6rem 2rem;
+      background: var(--bg-secondary);
+    }
+
+    .cost-visual {
+      max-width: 700px;
+      margin: 0 auto;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    .cost-header {
+      padding: 1.5rem 2rem;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .cost-title {
+      font-weight: 600;
+    }
+
+    .cost-total {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: var(--success);
+    }
+
+    .cost-items {
+      padding: 1rem 0;
+    }
+
+    .cost-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 2rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .cost-item:last-child {
+      border-bottom: none;
+    }
+
+    .cost-item-left {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .cost-item-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+    }
+
+    .cost-item-icon.frontend { background: rgba(168, 85, 247, 0.2); }
+    .cost-item-icon.api { background: rgba(99, 102, 241, 0.2); }
+    .cost-item-icon.db { background: rgba(34, 197, 94, 0.2); }
+    .cost-item-icon.cache { background: rgba(245, 158, 11, 0.2); }
+
+    .cost-item-name {
+      font-weight: 500;
+    }
+
+    .cost-item-type {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .cost-item-price {
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+
+    .cost-item-price.free {
+      color: var(--success);
+    }
+
+    /* Testimonial */
+    .testimonial-section {
+      padding: 6rem 2rem;
+      background: var(--bg-primary);
+    }
+
+    .testimonial {
+      max-width: 700px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .testimonial blockquote {
+      font-size: 1.5rem;
+      font-weight: 500;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+      font-style: italic;
+      color: var(--text-secondary);
+    }
+
+    .testimonial cite {
+      font-style: normal;
+      color: var(--text-muted);
+    }
+
+    /* CTA Section */
+    .cta-section {
+      padding: 8rem 2rem;
+      background: var(--bg-secondary);
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cta-section::before {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 150%;
+      height: 100%;
+      background: radial-gradient(ellipse at center bottom, rgba(99, 102, 241, 0.1) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    .cta-content {
+      position: relative;
+      z-index: 1;
+    }
+
+    .cta-section h2 {
+      font-size: 3rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 1rem;
+    }
+
+    .cta-section p {
+      font-size: 1.25rem;
+      color: var(--text-secondary);
+      margin-bottom: 2rem;
+    }
+
+    /* Footer */
+    footer {
+      padding: 3rem 2rem;
+      background: var(--bg-primary);
+      border-top: 1px solid var(--border-color);
+    }
+
+    .footer-container {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .footer-logo {
+      font-size: 1.25rem;
+      font-weight: 800;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 2rem;
+    }
+
+    .footer-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover {
+      color: var(--text-primary);
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .nav-links {
+        display: none;
+      }
+
+      .hero h1 {
+        font-size: 2.5rem;
+      }
+
+      .flow-visual {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+      }
+
+      .flow-arrow {
+        transform: rotate(90deg);
+      }
+
+      .compare-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .footer-container {
+        flex-direction: column;
+        gap: 1.5rem;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav>
+    <div class="nav-container">
+      <div class="logo">brick</div>
+      <div class="nav-links">
+        <a href="#how-it-works">How It Works</a>
+        <a href="#pricing">Pricing</a>
+        <a href="https://github.com/brick-cli/brick" target="_blank">GitHub</a>
+        <a href="/docs">Docs</a>
+        <a href="/app" class="nav-cta">Launch App</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-badge">
+      <span>NEW</span> Now with real-time cost estimation
+    </div>
+    <h1>
+      <span class="gradient">Vibe deploy</span><br>
+      your infrastructure.
+    </h1>
+    <p class="hero-subtitle">
+      Describe your architecture in plain English. See real-time costs.
+      Deploy to production in minutes.
+    </p>
+    <p class="hero-tagline">
+      Your idea. Running in production. Before lunch.
+    </p>
+    <div class="hero-ctas">
+      <a href="/app" class="btn btn-primary">
+        Start Building
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </a>
+      <a href="#demo" class="btn btn-secondary">
+        Watch Demo (45s)
+      </a>
+    </div>
+  </section>
+
+  <!-- Anti-DevOps Banner -->
+  <div class="anti-banner">
+    <p>
+      <span class="strike">TERRAFORM</span> &nbsp;&nbsp;
+      <span class="strike">CLOUDFORMATION</span> &nbsp;&nbsp;
+      <span class="strike">KUBERNETES</span> &nbsp;&nbsp;
+      <span class="highlight">JUST SHIP.</span>
+    </p>
+  </div>
+
+  <!-- Flow Section -->
+  <section class="flow-section" id="how-it-works">
+    <div class="section-container">
+      <div class="section-header">
+        <h2>How it works</h2>
+        <p>From idea to deployed infrastructure in three steps.</p>
+      </div>
+
+      <div class="flow-visual">
+        <div class="flow-box">
+          <div class="flow-box-label">You</div>
+          <div class="flow-box-content">
+            "Build me a blog<br>with Next.js and<br>PostgreSQL"
+          </div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box highlight">
+          <div class="flow-box-label">Brick</div>
+          <div class="flow-box-content">
+            Understands<br>Designs<br>Deploys
+          </div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-box">
+          <div class="flow-box-label">Production</div>
+          <div class="flow-box-content">
+            Your app is live<br>
+            <span style="font-size: 1.5rem;">🚀</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ways-grid">
+        <div class="way-card">
+          <div class="way-icon">💬</div>
+          <h3>Say it</h3>
+          <p>Describe your architecture in plain English. Our AI translates your intent into infrastructure.</p>
+        </div>
+        <div class="way-card">
+          <div class="way-icon">📐</div>
+          <h3>Draw it</h3>
+          <p>Sketch with Mermaid diagrams or use our visual canvas. Drag components, connect services.</p>
+        </div>
+        <div class="way-card">
+          <div class="way-icon">🚀</div>
+          <h3>Ship it</h3>
+          <p>One click. Real servers. Real databases. Running on DigitalOcean in minutes.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Demo Section -->
+  <section class="demo-section" id="demo">
+    <div class="demo-container">
+      <div class="section-header">
+        <h2>See it in action</h2>
+        <p>A conversation that ends with deployed infrastructure.</p>
+      </div>
+
+      <div class="demo-window">
+        <div class="demo-header">
+          <div class="demo-dot red"></div>
+          <div class="demo-dot yellow"></div>
+          <div class="demo-dot green"></div>
+        </div>
+        <div class="demo-content">
+          <!-- User Message -->
+          <div class="demo-message">
+            <div class="demo-avatar">👤</div>
+            <div class="demo-bubble">
+              <div class="demo-label">You</div>
+              <div class="demo-text">
+                I need a SaaS with a React dashboard, a Python API for data processing, PostgreSQL for storage, and Redis for caching user sessions.
+              </div>
+            </div>
+          </div>
+
+          <!-- Brick Response -->
+          <div class="demo-message">
+            <div class="demo-avatar brick">🧱</div>
+            <div class="demo-bubble">
+              <div class="demo-label">Brick</div>
+              <div class="demo-text">
+                Got it. Here's your architecture:
+              </div>
+              <div class="demo-diagram">     ┌──────────┐      ┌──────────┐      ┌──────────┐
+     │  React   │─────▶│  Python  │─────▶│ Postgres │
+     │Dashboard │      │   API    │      │    DB    │
+     └──────────┘      └────┬─────┘      └──────────┘
+                            │
+                       ┌────▼─────┐
+                       │  Redis   │
+                       │  Cache   │
+                       └──────────┘</div>
+              <div class="demo-cost">
+                <span class="demo-cost-label">Estimated monthly cost</span>
+                <span class="demo-cost-value">$54/mo</span>
+              </div>
+              <div class="demo-buttons">
+                <button class="demo-btn demo-btn-primary">Yes, ship it</button>
+                <button class="demo-btn demo-btn-secondary">Let me tweak it</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Comparison Section -->
+  <section class="compare-section">
+    <div class="section-container">
+      <div class="section-header">
+        <h2>Infrastructure shouldn't require a PhD</h2>
+        <p>Here's what you're not doing anymore.</p>
+      </div>
+
+      <div class="compare-grid">
+        <div class="compare-col bad">
+          <div class="compare-header bad">✗ The Old Way</div>
+          <ul class="compare-list">
+            <li><span class="compare-num">1</span> Learn cloud provider</li>
+            <li><span class="compare-num">2</span> Read infrastructure docs</li>
+            <li><span class="compare-num">3</span> Write Terraform/CDK/CloudFormation</li>
+            <li><span class="compare-num">4</span> Debug IAM permissions</li>
+            <li><span class="compare-num">5</span> Configure networking & VPCs</li>
+            <li><span class="compare-num">6</span> Set up CI/CD pipelines</li>
+            <li><span class="compare-num">7</span> Pray it works</li>
+            <li><span class="compare-num">8</span> Debug again</li>
+            <li><span class="compare-num">9</span> Finally deploy</li>
+            <li><span class="compare-num">10</span> Get surprised by the bill</li>
+          </ul>
+          <div class="compare-time">2-6 weeks</div>
+        </div>
+        <div class="compare-col good">
+          <div class="compare-header good">✓ The Brick Way</div>
+          <ul class="compare-list">
+            <li><span class="compare-num">1</span> Describe what you need</li>
+            <li><span class="compare-num">2</span> Review the architecture</li>
+            <li><span class="compare-num">3</span> Click deploy</li>
+            <li><span class="compare-num">4</span> Get coffee ☕</li>
+            <li><span class="compare-num">5</span> Share your live URL</li>
+          </ul>
+          <div class="compare-time">Under 5 minutes</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Cost Section -->
+  <section class="cost-section" id="pricing">
+    <div class="section-container">
+      <div class="section-header">
+        <h2>Every dollar visible. Before you deploy.</h2>
+        <p>No surprise bills. No hidden fees. Just clarity.</p>
+      </div>
+
+      <div class="cost-visual">
+        <div class="cost-header">
+          <span class="cost-title">Your Architecture</span>
+          <span class="cost-total">$42/mo</span>
+        </div>
+        <div class="cost-items">
+          <div class="cost-item">
+            <div class="cost-item-left">
+              <div class="cost-item-icon frontend">🌐</div>
+              <div>
+                <div class="cost-item-name">Next.js Frontend</div>
+                <div class="cost-item-type">Static Site • CDN</div>
+              </div>
+            </div>
+            <div class="cost-item-price free">$0.00</div>
+          </div>
+          <div class="cost-item">
+            <div class="cost-item-left">
+              <div class="cost-item-icon api">⚡</div>
+              <div>
+                <div class="cost-item-name">Node.js API</div>
+                <div class="cost-item-type">Service • Basic</div>
+              </div>
+            </div>
+            <div class="cost-item-price">$12.00</div>
+          </div>
+          <div class="cost-item">
+            <div class="cost-item-left">
+              <div class="cost-item-icon db">🗄️</div>
+              <div>
+                <div class="cost-item-name">PostgreSQL</div>
+                <div class="cost-item-type">Database • 1GB</div>
+              </div>
+            </div>
+            <div class="cost-item-price">$15.00</div>
+          </div>
+          <div class="cost-item">
+            <div class="cost-item-left">
+              <div class="cost-item-icon cache">⚡</div>
+              <div>
+                <div class="cost-item-name">Redis Cache</div>
+                <div class="cost-item-type">Database • Basic</div>
+              </div>
+            </div>
+            <div class="cost-item-price">$15.00</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Testimonial -->
+  <section class="testimonial-section">
+    <div class="testimonial">
+      <blockquote>
+        "I spent 3 weeks learning Terraform. With Brick, I deployed in 3 minutes. I'm not even mad — I'm impressed."
+      </blockquote>
+      <cite>— Every developer who's suffered through IaC</cite>
+    </div>
+  </section>
+
+  <!-- Final CTA -->
+  <section class="cta-section">
+    <div class="cta-content">
+      <h2>Ready to vibe deploy?</h2>
+      <p>Your idea. Running in production. Before lunch.</p>
+      <a href="/app" class="btn btn-primary">
+        Start Building — It's Free
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-container">
+      <div class="footer-logo">brick</div>
+      <div class="footer-links">
+        <a href="/docs">Documentation</a>
+        <a href="https://github.com/brick-cli/brick" target="_blank">GitHub</a>
+        <a href="https://twitter.com/brickcli" target="_blank">Twitter</a>
+        <a href="mailto:hello@brick.run">Contact</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

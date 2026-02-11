@@ -1,0 +1,7 @@
+flowchart TD
+    %% brick:name=analytics
+    A{{Daily Report}}
+    %% brick:A:schedule=0 6 * * *
+    B{{Hourly Sync}}
+    %% brick:B:schedule=0 * * * *
+    A & B --> C[(PostgreSQL)]
