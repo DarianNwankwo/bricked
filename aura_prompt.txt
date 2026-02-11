@@ -1,0 +1,99 @@
+## Design Prompt: Project Creation Flow (Multi-Step Full Page)
+
+### Overview
+Design a modern, dark-themed multi-step project creation flow for an AI-powered infrastructure deployment tool. Users progress through full-page views rather than modals.
+
+### Brand & Style
+- Dark theme with primary background #0A0A0A
+- Accent gradient: indigo to purple (#6366F1 to #8B5CF6)
+- Fonts: Inter for body, monospace for technical elements
+- Style: Premium SaaS, similar to Linear, Vercel, or Railway
+- No emojis - use custom icons (Iconify Solar icon set)
+
+---
+
+### Step 1: Template Selection
+
+**Page layout:** Centered content, max-width 900px
+
+**Header:** "Start Your Project"
+**Subheader:** "Choose a template or start from scratch"
+
+**Template grid** (3-4 columns, responsive):
+Each card shows:
+- Icon (32px)
+- Template name (bold)
+- Short description (muted)
+- Component count pill
+
+**Templates:**
+- Simple Web App - "Basic web application with database" - 3 components
+- Scalable Web App - "Load-balanced app with caching" - 5 components
+- Microservices Platform - "Distributed services with messaging" - 7 components
+- E-commerce Platform - "Full stack with payments" - 11 components
+- SaaS Starter - "Multi-tenant with auth and billing" - 8 components
+- Blank Canvas - "Start from scratch" - dashed border style
+
+**Below grid:**
+- "Or describe what you want to build in the chat"
+- Button: "Use AI Assistant Instead"
+
+Clicking a template transitions to Step 2. Clicking Blank Canvas skips directly to the editor.
+
+---
+
+### Step 2: Template Configuration
+
+**Page layout:** Two-column or stacked layout
+
+**Left/Top section - Template Overview:**
+- Back arrow + "Back to templates"
+- Large icon (64px)
+- Template name (32px, bold)
+- Full description paragraph explaining what this architecture provides, when to use it, and what problems it solves
+- Visual mini-diagram showing how components connect (simple node graph)
+
+**Right/Bottom section - Configure Your Stack:**
+
+**Section header:** "Choose your technologies"
+
+**Component list** (cards or rows):
+Each component shows:
+- Colored icon based on type
+- Component name
+- Type label (e.g., "SERVICE", "DATABASE")
+- Technology dropdown selector
+- Optional: Brief tooltip explaining what this component does
+
+**Example for Scalable Web App:**
+| Component | Type | Tech Options |
+|-----------|------|--------------|
+| CDN | cdn | Cloudflare, AWS CloudFront, Fastly |
+| Load Balancer | load_balancer | Nginx, HAProxy, Traefik |
+| API Server | service | Node.js, Python/FastAPI, Go, Ruby/Rails |
+| Cache | cache | Redis, Memcached, KeyDB |
+| Primary DB | database | PostgreSQL, MySQL, MongoDB |
+
+**Bottom action bar (sticky or inline):**
+- Estimated monthly cost preview (e.g., "$42/mo")
+- Button: "Create Project" (primary, prominent)
+
+---
+
+### Step 3: Editor (Canvas View)
+After clicking "Create Project", user lands in the main editor with:
+- Their configured architecture rendered on the canvas
+- All selected technologies applied to components
+- Ready to refine, connect to repos, or deploy
+
+---
+
+### Transitions
+- Smooth slide or fade transitions between steps
+- Progress indicator optional (dots or breadcrumb: Templates > Configure > Build)
+- Back navigation always available
+
+### Mobile
+- Single column layout
+- Full-width cards and dropdowns
+- Sticky bottom action bar

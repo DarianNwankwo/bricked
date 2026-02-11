@@ -1,0 +1,389 @@
+{
+  "version": "1.0",
+  "templates": [
+    {
+      "name": "Simple Web App",
+      "description": "Basic web application with database",
+      "tier": "two-tier",
+      "components": [
+        {
+          "type": "static_site",
+          "name": "Frontend",
+          "description": "React/Vue SPA"
+        },
+        {
+          "type": "service",
+          "name": "API Server",
+          "description": "REST API backend"
+        },
+        {
+          "type": "database",
+          "name": "Database",
+          "description": "PostgreSQL database"
+        }
+      ],
+      "connections": [
+        { "from": "Frontend", "to": "API Server", "protocol": "HTTPS" },
+        { "from": "API Server", "to": "Database", "protocol": "TCP" }
+      ],
+      "scalability": "vertical",
+      "source_patterns": ["Layered Architecture"]
+    },
+    {
+      "name": "Scalable Web App",
+      "description": "Load-balanced web application with caching",
+      "tier": "three-tier",
+      "components": [
+        {
+          "type": "cdn",
+          "name": "CDN",
+          "description": "Static assets via CDN"
+        },
+        {
+          "type": "load_balancer",
+          "name": "Load Balancer",
+          "description": "Distributes traffic"
+        },
+        {
+          "type": "service",
+          "name": "API Server",
+          "description": "Stateless API instances"
+        },
+        {
+          "type": "cache",
+          "name": "Cache",
+          "description": "Redis cache layer"
+        },
+        {
+          "type": "database",
+          "name": "Primary DB",
+          "description": "PostgreSQL with replicas"
+        }
+      ],
+      "connections": [
+        { "from": "CDN", "to": "Load Balancer", "protocol": "HTTPS" },
+        { "from": "Load Balancer", "to": "API Server", "protocol": "HTTP" },
+        { "from": "API Server", "to": "Cache", "protocol": "TCP" },
+        { "from": "API Server", "to": "Primary DB", "protocol": "TCP" }
+      ],
+      "scalability": "horizontal",
+      "source_patterns": ["Load Balancer", "Cache"]
+    },
+    {
+      "name": "Microservices Platform",
+      "description": "Distributed microservices with event-driven communication",
+      "tier": "microservices",
+      "components": [
+        {
+          "type": "api_gateway",
+          "name": "API Gateway",
+          "description": "Entry point for all requests"
+        },
+        {
+          "type": "auth",
+          "name": "Auth Service",
+          "description": "Authentication & authorization"
+        },
+        {
+          "type": "service",
+          "name": "User Service",
+          "description": "User management"
+        },
+        {
+          "type": "service",
+          "name": "Order Service",
+          "description": "Order processing"
+        },
+        {
+          "type": "queue",
+          "name": "Event Bus",
+          "description": "Kafka/RabbitMQ message broker"
+        },
+        {
+          "type": "database",
+          "name": "User DB",
+          "description": "User service database"
+        },
+        {
+          "type": "database",
+          "name": "Order DB",
+          "description": "Order service database"
+        }
+      ],
+      "connections": [
+        { "from": "API Gateway", "to": "Auth Service", "protocol": "gRPC" },
+        { "from": "API Gateway", "to": "User Service", "protocol": "gRPC" },
+        { "from": "API Gateway", "to": "Order Service", "protocol": "gRPC" },
+        { "from": "User Service", "to": "User DB", "protocol": "TCP" },
+        { "from": "Order Service", "to": "Order DB", "protocol": "TCP" },
+        { "from": "Order Service", "to": "Event Bus", "protocol": "AMQP" },
+        { "from": "User Service", "to": "Event Bus", "protocol": "AMQP" }
+      ],
+      "scalability": "horizontal",
+      "source_patterns": ["Microservices", "API Gateway", "Message Queue", "Event-Driven"]
+    },
+    {
+      "name": "Event Sourcing System",
+      "description": "CQRS with event sourcing for complex domains",
+      "tier": "microservices",
+      "components": [
+        {
+          "type": "service",
+          "name": "Command API",
+          "description": "Handles write operations"
+        },
+        {
+          "type": "service",
+          "name": "Query API",
+          "description": "Handles read operations"
+        },
+        {
+          "type": "queue",
+          "name": "Event Store",
+          "description": "Immutable event log"
+        },
+        {
+          "type": "worker",
+          "name": "Projector",
+          "description": "Builds read models from events"
+        },
+        {
+          "type": "database",
+          "name": "Read DB",
+          "description": "Optimized read replicas"
+        }
+      ],
+      "connections": [
+        { "from": "Command API", "to": "Event Store", "protocol": "TCP" },
+        { "from": "Event Store", "to": "Projector", "protocol": "Streaming" },
+        { "from": "Projector", "to": "Read DB", "protocol": "TCP" },
+        { "from": "Query API", "to": "Read DB", "protocol": "TCP" }
+      ],
+      "scalability": "horizontal",
+      "source_patterns": ["CQRS", "Event Sourcing", "Message Queue"]
+    },
+    {
+      "name": "Real-time Application",
+      "description": "WebSocket-based real-time features",
+      "tier": "three-tier",
+      "components": [
+        {
+          "type": "static_site",
+          "name": "Web Client",
+          "description": "Real-time web app"
+        },
+        {
+          "type": "service",
+          "name": "WebSocket Server",
+          "description": "Handles persistent connections"
+        },
+        {
+          "type": "service",
+          "name": "API Server",
+          "description": "REST API for CRUD"
+        },
+        {
+          "type": "cache",
+          "name": "Redis Pub/Sub",
+          "description": "Real-time message distribution"
+        },
+        {
+          "type": "database",
+          "name": "Database",
+          "description": "Persistent storage"
+        }
+      ],
+      "connections": [
+        { "from": "Web Client", "to": "WebSocket Server", "protocol": "WSS" },
+        { "from": "Web Client", "to": "API Server", "protocol": "HTTPS" },
+        { "from": "WebSocket Server", "to": "Redis Pub/Sub", "protocol": "TCP" },
+        { "from": "API Server", "to": "Database", "protocol": "TCP" }
+      ],
+      "scalability": "horizontal",
+      "source_patterns": ["Event-Driven", "Cache"]
+    },
+    {
+      "name": "ML Pipeline",
+      "description": "Machine learning inference pipeline with model serving",
+      "tier": "microservices",
+      "components": [
+        {
+          "type": "api_gateway",
+          "name": "API Gateway",
+          "description": "Request routing"
+        },
+        {
+          "type": "service",
+          "name": "Feature Service",
+          "description": "Feature extraction"
+        },
+        {
+          "type": "ml_model",
+          "name": "ML Model",
+          "description": "Model inference endpoint"
+        },
+        {
+          "type": "cache",
+          "name": "Feature Cache",
+          "description": "Cached feature vectors"
+        },
+        {
+          "type": "storage",
+          "name": "Model Storage",
+          "description": "Model artifacts (S3)"
+        },
+        {
+          "type": "monitoring",
+          "name": "ML Monitoring",
+          "description": "Model performance tracking"
+        }
+      ],
+      "connections": [
+        { "from": "API Gateway", "to": "Feature Service", "protocol": "HTTPS" },
+        { "from": "Feature Service", "to": "ML Model", "protocol": "gRPC" },
+        { "from": "Feature Service", "to": "Feature Cache", "protocol": "TCP" },
+        { "from": "ML Model", "to": "Model Storage", "protocol": "HTTPS" },
+        { "from": "ML Model", "to": "ML Monitoring", "protocol": "TCP" }
+      ],
+      "scalability": "horizontal",
+      "source_patterns": ["ML Pipeline", "Feature Store"]
+    },
+    {
+      "name": "E-commerce Platform",
+      "description": "Full e-commerce stack with payments and notifications",
+      "tier": "microservices",
+      "components": [
+        {
+          "type": "cdn",
+          "name": "CDN",
+          "description": "Static assets & images"
+        },
+        {
+          "type": "api_gateway",
+          "name": "API Gateway",
+          "description": "Route requests"
+        },
+        {
+          "type": "auth",
+          "name": "Auth",
+          "description": "User authentication"
+        },
+        {
+          "type": "service",
+          "name": "Product Service",
+          "description": "Product catalog"
+        },
+        {
+          "type": "service",
+          "name": "Cart Service",
+          "description": "Shopping cart"
+        },
+        {
+          "type": "service",
+          "name": "Order Service",
+          "description": "Order management"
+        },
+        {
+          "type": "payment",
+          "name": "Payment Gateway",
+          "description": "Stripe integration"
+        },
+        {
+          "type": "email",
+          "name": "Email Service",
+          "description": "Transactional emails"
+        },
+        {
+          "type": "search",
+          "name": "Search",
+          "description": "Product search (Elasticsearch)"
+        },
+        {
+          "type": "database",
+          "name": "Database",
+          "description": "Primary PostgreSQL"
+        },
+        {
+          "type": "cache",
+          "name": "Cache",
+          "description": "Redis session & cache"
+        }
+      ],
+      "connections": [
+        { "from": "CDN", "to": "API Gateway", "protocol": "HTTPS" },
+        { "from": "API Gateway", "to": "Auth", "protocol": "gRPC" },
+        { "from": "API Gateway", "to": "Product Service", "protocol": "gRPC" },
+        { "from": "API Gateway", "to": "Cart Service", "protocol": "gRPC" },
+        { "from": "API Gateway", "to": "Order Service", "protocol": "gRPC" },
+        { "from": "Product Service", "to": "Search", "protocol": "HTTP" },
+        { "from": "Product Service", "to": "Database", "protocol": "TCP" },
+        { "from": "Cart Service", "to": "Cache", "protocol": "TCP" },
+        { "from": "Order Service", "to": "Payment Gateway", "protocol": "HTTPS" },
+        { "from": "Order Service", "to": "Email Service", "protocol": "HTTPS" },
+        { "from": "Order Service", "to": "Database", "protocol": "TCP" }
+      ],
+      "scalability": "horizontal",
+      "source_patterns": ["Microservices", "E-commerce", "CQRS"]
+    },
+    {
+      "name": "SaaS Starter",
+      "description": "Multi-tenant SaaS with auth, billing, and analytics",
+      "tier": "three-tier",
+      "components": [
+        {
+          "type": "static_site",
+          "name": "Web App",
+          "description": "React frontend"
+        },
+        {
+          "type": "service",
+          "name": "API",
+          "description": "Main backend API"
+        },
+        {
+          "type": "auth",
+          "name": "Auth",
+          "description": "Auth0/Cognito"
+        },
+        {
+          "type": "payment",
+          "name": "Billing",
+          "description": "Stripe subscriptions"
+        },
+        {
+          "type": "analytics",
+          "name": "Analytics",
+          "description": "Usage tracking"
+        },
+        {
+          "type": "database",
+          "name": "Database",
+          "description": "PostgreSQL"
+        },
+        {
+          "type": "queue",
+          "name": "Job Queue",
+          "description": "Background jobs"
+        },
+        {
+          "type": "worker",
+          "name": "Worker",
+          "description": "Async processing"
+        }
+      ],
+      "connections": [
+        { "from": "Web App", "to": "API", "protocol": "HTTPS" },
+        { "from": "Web App", "to": "Auth", "protocol": "HTTPS" },
+        { "from": "API", "to": "Auth", "protocol": "HTTPS" },
+        { "from": "API", "to": "Billing", "protocol": "HTTPS" },
+        { "from": "API", "to": "Analytics", "protocol": "HTTPS" },
+        { "from": "API", "to": "Database", "protocol": "TCP" },
+        { "from": "API", "to": "Job Queue", "protocol": "TCP" },
+        { "from": "Worker", "to": "Job Queue", "protocol": "TCP" },
+        { "from": "Worker", "to": "Database", "protocol": "TCP" }
+      ],
+      "scalability": "horizontal",
+      "source_patterns": ["SaaS", "Multi-tenant"]
+    }
+  ]
+}

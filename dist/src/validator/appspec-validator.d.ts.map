@@ -1,0 +1,1 @@
+{"version":3,"file":"appspec-validator.d.ts","sourceRoot":"","sources":["../../../src/validator/appspec-validator.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,qBAAqB,CAAC;AAGnD,MAAM,WAAW,gBAAgB;IAC/B,KAAK,EAAE,OAAO,CAAC;IACf,MAAM,EAAE,MAAM,EAAE,CAAC;IACjB,QAAQ,EAAE,MAAM,EAAE,CAAC;CACpB;AAKD,wBAAgB,eAAe,CAAC,OAAO,EAAE,OAAO,GAAG,gBAAgB,CAoFlE"}
