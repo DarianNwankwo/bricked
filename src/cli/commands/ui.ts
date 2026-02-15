@@ -453,6 +453,7 @@ export const uiCommand = new Command('ui')
     let nextComponentId = 0;
     let currentBAC: BrickAppContract | null = null;
     let bacVersion = 0;
+    let currentDocs: string = '';
 
     // Extract ```bac-patch [...] ``` fenced code blocks from text, parse JSON arrays
     function extractBacPatchBlocks(text: string): BACPatch[][] {
@@ -581,7 +582,7 @@ export const uiCommand = new Command('ui')
         componentSpecs: currentProject.componentSpecs,
         bac: currentBAC,
         diagram: currentDiagram,
-        documentation: documentation || savedProjects.get(currentProjectId)?.documentation || '',
+        documentation: documentation || currentDocs || savedProjects.get(currentProjectId)?.documentation || '',
         lastGeneratedComponents: currentProject.lastGeneratedComponents,
       };
       savedProjects.set(currentProjectId, project);
@@ -779,7 +780,7 @@ export const uiCommand = new Command('ui')
           let systemContext: string | undefined;
           if (contextMode === 'docs') {
             const projectName = currentBAC?.metadata?.name || manualArchitecture?.name || undefined;
-            systemContext = buildDocsChatSystemContext(clientDocs || '', currentBAC || undefined, projectName);
+            systemContext = buildDocsChatSystemContext(clientDocs || currentDocs || '', currentBAC || undefined, projectName);
           } else if (contextMode === 'code') {
             systemContext = buildCodeChatSystemContext(currentBAC || undefined, currentProject || undefined);
           } else {
@@ -821,10 +822,11 @@ export const uiCommand = new Command('ui')
                 const docsPatches = extractDocsUpdateBlocks(accumulatedText);
                 if (docsPatches.length > 0) {
                   try {
-                    let updatedDocs = clientDocs || '';
+                    let updatedDocs = clientDocs || currentDocs || '';
                     for (const patch of docsPatches) {
                       updatedDocs = applyDocsPatch(updatedDocs, patch);
                     }
+                    currentDocs = updatedDocs;
                     res.write(`data: ${JSON.stringify({
                       type: 'docs_update',
                       docs: updatedDocs,
@@ -1084,6 +1086,7 @@ Create all files needed for a production-ready project. Include package.json, Ty
         manualArchitecture = null;
         nextComponentId = 0;
         currentBAC = null;
+        currentDocs = '';
         // Also reset the dev mode Claude Code session
         import('../../agent/claude-code.js').then(m => m.clearConversation()).catch(() => {});
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2333,7 +2336,7 @@ Create all files needed for a production-ready project. Include package.json, Ty
             componentSpecs: currentProject.componentSpecs,
             bac: currentBAC,
             diagram: currentDiagram,
-            documentation: documentation || savedProjects.get(currentProjectId)?.documentation || '',
+            documentation: documentation || currentDocs || savedProjects.get(currentProjectId)?.documentation || '',
             lastGeneratedComponents: currentProject.lastGeneratedComponents,
           };
           savedProjects.set(currentProjectId, project);
@@ -2365,6 +2368,7 @@ Create all files needed for a production-ready project. Include package.json, Ty
         currentProject.lastGeneratedComponents = project.lastGeneratedComponents || [];
         currentBAC = project.bac || null;
         currentDiagram = project.diagram;
+        currentDocs = project.documentation || '';
         conversationHistory = [];
         // Also reset the dev mode Claude Code session when loading a new project
         import('../../agent/claude-code.js').then(m => m.clearConversation()).catch(() => {});
@@ -2432,6 +2436,7 @@ Create all files needed for a production-ready project. Include package.json, Ty
           manualArchitecture = null;
           currentDiagram = null;
           currentBAC = null;
+          currentDocs = '';
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });

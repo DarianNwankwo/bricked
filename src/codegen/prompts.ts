@@ -345,7 +345,9 @@ export function buildDevChatSystemContext(bac: Parameters<typeof formatBACForPro
   return BAC_DEV_CHAT_SYSTEM_PROMPT + '\n## Current Architecture State\n\n' + formatBACForPrompt(bac);
 }
 
-export const DOCS_DEV_CHAT_SYSTEM_PROMPT = `You are an AI assistant embedded in Brick Studio's dev mode. You help maintain and update project documentation. Output structured patch operations inside fenced code blocks to modify the docs.
+export const DOCS_DEV_CHAT_SYSTEM_PROMPT = `You are a project documentation assistant. You write and maintain technical documentation for the user's project. Output structured patch operations inside fenced code blocks to modify the docs.
+
+IMPORTANT: You are documenting the USER'S PROJECT — its architecture, components, APIs, data flows, and deployment. Do NOT document the tool or platform you are embedded in. Focus exclusively on the project described in the architecture reference and current documentation below.
 
 ## How to Modify Documentation
 
