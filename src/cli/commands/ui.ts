@@ -13,9 +13,9 @@ import { chatStream, getConfiguredModel, getConfiguredProvider, POPULAR_MODELS, 
 import { SYSTEM_PROMPT } from '../../llm/prompts/system.js';
 import { formatExamplesForPrompt } from '../../llm/prompts/examples.js';
 import { getLLMConfig, OPENROUTER_BASE_URL } from '../../llm/config.js';
-import { planCodeStructure, generateFile, editFile, type Component, type FilePlan, type GeneratedFile } from '../../codegen/index.js';
-import { deriveBrickAppContract, validateBrickAppContract } from '../../bac/index.js';
-import type { BrickAppContract } from '../../types/bac.js';
+import { planCodeStructure, planCodeStructureFromBAC, generateFile, generateFileFromBAC, editFile, type Component, type FilePlan, type GeneratedFile, formatBACForPrompt, INTENT_TO_BAC_PROMPT, buildDevChatSystemContext, buildDocsChatSystemContext, buildCodeChatSystemContext } from '../../codegen/index.js';
+import { deriveBrickAppContract, validateBrickAppContract, bacToArchitecture, applyBACPatch, validateContractCompleteness } from '../../bac/index.js';
+import type { BrickAppContract, BACPatch } from '../../types/bac.js';
 import { stashArtifacts, loadArtifacts, deleteArtifacts, slugify } from '../../server/services/artifacts.js';
 import YAML from 'yaml';
 
@@ -452,6 +452,113 @@ export const uiCommand = new Command('ui')
     let manualArchitecture: ManualArchitecture | null = null;
     let nextComponentId = 0;
     let currentBAC: BrickAppContract | null = null;
+    let bacVersion = 0;
+
+    // Extract ```bac-patch [...] ``` fenced code blocks from text, parse JSON arrays
+    function extractBacPatchBlocks(text: string): BACPatch[][] {
+      const blocks: BACPatch[][] = [];
+      const regex = /```bac-patch\s*\n([\s\S]*?)```/g;
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        try {
+          const parsed = JSON.parse(match[1].trim());
+          if (Array.isArray(parsed)) {
+            blocks.push(parsed as BACPatch[]);
+          }
+        } catch {
+          // Skip unparseable blocks
+        }
+      }
+      return blocks;
+    }
+
+    // --- Docs patch support ---
+    interface DocsPatch {
+      op: 'replace_all' | 'append_section' | 'replace_section';
+      content: string;
+      heading?: string;
+    }
+
+    function extractDocsUpdateBlocks(text: string): DocsPatch[] {
+      const patches: DocsPatch[] = [];
+      const regex = /```docs-update\s*\n([\s\S]*?)```/g;
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        try {
+          const parsed = JSON.parse(match[1].trim());
+          if (Array.isArray(parsed)) {
+            patches.push(...(parsed as DocsPatch[]));
+          }
+        } catch {
+          // Skip unparseable blocks
+        }
+      }
+      return patches;
+    }
+
+    function applyDocsPatch(docs: string, patch: DocsPatch): string {
+      switch (patch.op) {
+        case 'replace_all':
+          return patch.content;
+        case 'append_section':
+          return docs.trimEnd() + '\n\n' + (patch.heading ? patch.heading + '\n\n' : '') + patch.content;
+        case 'replace_section': {
+          if (!patch.heading) return docs;
+          // Determine heading level from the heading string
+          const headingMatch = patch.heading.match(/^(#{1,6})\s/);
+          const level = headingMatch ? headingMatch[1].length : 2;
+          // Escape heading for regex
+          const escaped = patch.heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          // Match from this heading to the next heading of same or higher level, or end of string
+          const sectionRegex = new RegExp(
+            `(${escaped}\\n)([\\s\\S]*?)(?=\\n#{1,${level}}\\s|$)`
+          );
+          if (sectionRegex.test(docs)) {
+            return docs.replace(sectionRegex, `$1\n${patch.content}\n`);
+          }
+          // If heading not found, append as new section
+          return docs.trimEnd() + '\n\n' + patch.heading + '\n\n' + patch.content;
+        }
+        default:
+          return docs;
+      }
+    }
+
+    // Apply BAC patches and sync to architecture — shared helper
+    function applyBacPatchesAndSync(patches: BACPatch[]): { bac: BrickAppContract; architecture: ManualArchitecture | null; completeness: ReturnType<typeof validateContractCompleteness> } {
+      let patched = currentBAC!;
+      for (const patch of patches) {
+        patched = applyBACPatch(patched, patch);
+      }
+      currentBAC = patched;
+      bacVersion++;
+
+      // Sync back to architecture
+      const projected = bacToArchitecture(patched);
+      if (manualArchitecture) {
+        manualArchitecture.components = projected.components.map(c => ({
+          id: c.id,
+          name: c.name,
+          type: c.type as ComponentType,
+          x: c.x ?? manualArchitecture!.components.find(mc => mc.id === c.id)?.x ?? 100,
+          y: c.y ?? manualArchitecture!.components.find(mc => mc.id === c.id)?.y ?? 100,
+        }));
+        manualArchitecture.connections = projected.connections.map(c => ({
+          from: c.from,
+          to: c.to,
+          label: c.label,
+          contract: c.contract,
+        }));
+        for (const comp of projected.components) {
+          if (comp.spec) {
+            currentProject.componentSpecs[comp.id] = comp.spec;
+          }
+        }
+      }
+
+      const completeness = validateContractCompleteness(patched);
+      return { bac: patched, architecture: manualArchitecture, completeness };
+    }
 
     // Helper to generate unique IDs
     function generateId(): string {
@@ -553,6 +660,16 @@ export const uiCommand = new Command('ui')
             })),
             existing: currentBAC,
           });
+          // Preserve layout positions in BAC node contracts
+          if (currentBAC) {
+            for (const node of currentBAC.systemContracts.nodes) {
+              const archComponent = manualArchitecture!.components.find(c => c.id === node.nodeId);
+              if (archComponent) {
+                node.x = archComponent.x;
+                node.y = archComponent.y;
+              }
+            }
+          }
           return;
         }
 
@@ -642,7 +759,8 @@ export const uiCommand = new Command('ui')
 
         try {
           const body = await getRequestBody(req);
-          const { instruction } = JSON.parse(body);
+          const { instruction, context: devContext, projectDocs: clientDocs } = JSON.parse(body);
+          const contextMode: 'canvas' | 'docs' | 'code' = devContext || 'canvas';
 
           if (!instruction || typeof instruction !== 'string') {
             res.write(`data: ${JSON.stringify({ type: 'error', content: 'Missing instruction' })}\n\n`);
@@ -657,9 +775,68 @@ export const uiCommand = new Command('ui')
             cancelCurrentRequest();
           });
 
-          // Stream events from the persistent Claude Code process
-          for await (const event of sendMessage(instruction, process.cwd())) {
+          // Build system context based on selected context mode
+          let systemContext: string | undefined;
+          if (contextMode === 'docs') {
+            const projectName = currentBAC?.metadata?.name || manualArchitecture?.name || undefined;
+            systemContext = buildDocsChatSystemContext(clientDocs || '', currentBAC || undefined, projectName);
+          } else if (contextMode === 'code') {
+            systemContext = buildCodeChatSystemContext(currentBAC || undefined, currentProject || undefined);
+          } else {
+            // canvas (default)
+            systemContext = currentBAC ? buildDevChatSystemContext(currentBAC) : undefined;
+          }
+
+          // Stream events, accumulate text for patch extraction
+          let accumulatedText = '';
+          for await (const event of sendMessage(instruction, process.cwd(), { systemContext })) {
+            if (event.type === 'text' && event.content) {
+              accumulatedText += event.content;
+            }
+
             res.write(`data: ${JSON.stringify(event)}\n\n`);
+
+            // After turn completes, run context-specific post-processing
+            if (event.type === 'done') {
+              if (contextMode === 'canvas' && currentBAC) {
+                const patchBlocks = extractBacPatchBlocks(accumulatedText);
+                const allPatches: BACPatch[] = patchBlocks.flat();
+                if (allPatches.length > 0) {
+                  try {
+                    const { bac, architecture, completeness } = applyBacPatchesAndSync(allPatches);
+                    const ops = [...new Set(allPatches.map(p => p.op))];
+                    res.write(`data: ${JSON.stringify({
+                      type: 'bac_update',
+                      patches: allPatches,
+                      bac,
+                      architecture,
+                      completeness,
+                      content: `${allPatches.length} patch(es) applied (${ops.join(', ')})`,
+                    })}\n\n`);
+                  } catch (patchErr) {
+                    res.write(`data: ${JSON.stringify({ type: 'error', content: 'Failed to apply BAC patches: ' + (patchErr as Error).message })}\n\n`);
+                  }
+                }
+              } else if (contextMode === 'docs') {
+                const docsPatches = extractDocsUpdateBlocks(accumulatedText);
+                if (docsPatches.length > 0) {
+                  try {
+                    let updatedDocs = clientDocs || '';
+                    for (const patch of docsPatches) {
+                      updatedDocs = applyDocsPatch(updatedDocs, patch);
+                    }
+                    res.write(`data: ${JSON.stringify({
+                      type: 'docs_update',
+                      docs: updatedDocs,
+                      content: `${docsPatches.length} docs patch(es) applied`,
+                    })}\n\n`);
+                  } catch (docsErr) {
+                    res.write(`data: ${JSON.stringify({ type: 'error', content: 'Failed to apply docs patches: ' + (docsErr as Error).message })}\n\n`);
+                  }
+                }
+              }
+              // code context: no post-processing needed (Claude Code handles files via tool_use)
+            }
           }
         } catch (error) {
           res.write(`data: ${JSON.stringify({ type: 'error', content: (error as Error).message })}\n\n`);
@@ -692,6 +869,97 @@ export const uiCommand = new Command('ui')
         const cancelled = cancelCurrentRequest();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ cancelled }));
+        return;
+      }
+
+      // Claude Code agent — BAC-driven code generation
+      if (url.pathname === '/api/agent/claude-code/generate' && req.method === 'POST') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        });
+
+        try {
+          const body = await getRequestBody(req);
+          const { nodeId } = JSON.parse(body) as { nodeId?: string };
+
+          if (!currentBAC) {
+            res.write(`data: ${JSON.stringify({ type: 'error', content: 'No BAC available. Create an architecture first.' })}\n\n`);
+            res.end();
+            return;
+          }
+
+          // Check completeness
+          const completeness = validateContractCompleteness(currentBAC);
+          if (!completeness.complete) {
+            const incomplete = completeness.incompleteNodes.map(n => `${n.nodeName}: ${n.fields.join(', ')}`).join('; ');
+            res.write(`data: ${JSON.stringify({ type: 'error', content: `Contracts incomplete: ${incomplete}. Fill all contracts before generating.` })}\n\n`);
+            res.end();
+            return;
+          }
+
+          const { sendMessage, cancelCurrentRequest } = await import('../../agent/claude-code.js');
+          req.on('close', () => { cancelCurrentRequest(); });
+
+          // Build focused instruction
+          let instruction: string;
+          const bacContext = formatBACForPrompt(currentBAC);
+
+          if (nodeId) {
+            const node = currentBAC.systemContracts.nodes.find(n => n.nodeId === nodeId);
+            if (!node) {
+              res.write(`data: ${JSON.stringify({ type: 'error', content: `Node ${nodeId} not found in BAC` })}\n\n`);
+              res.end();
+              return;
+            }
+            const adjacentEdges = currentBAC.systemContracts.edges.filter(
+              e => e.fromNodeId === nodeId || e.toNodeId === nodeId
+            );
+            instruction = `Generate the implementation for the "${node.nodeName}" component (${node.nodeType}).
+
+Input Contract: ${node.inputContract}
+Output Contract: ${node.outputContract}
+${node.description ? `Description: ${node.description}` : ''}
+${node.notes ? `Notes: ${node.notes}` : ''}
+
+${adjacentEdges.length > 0 ? `Connected edges:\n${adjacentEdges.map(e => `- ${e.fromNodeId} → ${e.toNodeId}: source=${e.sourceOutputContract}, target=${e.targetInputContract}`).join('\n')}` : ''}
+
+Create all necessary files for this component with proper types matching the contracts.`;
+          } else {
+            // Generate all — topological order
+            const nodes = currentBAC.systemContracts.nodes;
+            instruction = `Generate a complete implementation for this application.
+
+${nodes.map(n => `- ${n.nodeName} (${n.nodeType}): input=${n.inputContract}, output=${n.outputContract}`).join('\n')}
+
+Create all files needed for a production-ready project. Include package.json, TypeScript configs, Dockerfiles, and implementation files for each component. Ensure type contracts are respected across component boundaries.`;
+          }
+
+          // Stream with BAC system context
+          for await (const event of sendMessage(instruction, process.cwd(), { systemContext: bacContext })) {
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+
+            // Stash artifacts when done
+            if (event.type === 'done' && event.summary?.filesChanged?.length) {
+              try {
+                const projectSlug = slugify(currentBAC.metadata.name || 'brick-app');
+                const artifactFiles = event.summary.filesChanged.map(f => ({
+                  path: f,
+                  content: '', // Content is already on disk from Claude Code
+                  componentId: nodeId || null,
+                }));
+                res.write(`data: ${JSON.stringify({ type: 'status', content: `Stashed ${artifactFiles.length} files to artifacts/${projectSlug}` })}\n\n`);
+              } catch (e) {
+                // Non-fatal
+              }
+            }
+          }
+        } catch (error) {
+          res.write(`data: ${JSON.stringify({ type: 'error', content: (error as Error).message })}\n\n`);
+        }
+
+        res.end();
         return;
       }
 
@@ -1615,7 +1883,7 @@ export const uiCommand = new Command('ui')
         return;
       }
 
-      // Replace current BAC
+      // Replace current BAC and sync back to graph
       if (url.pathname === '/api/bac' && req.method === 'PUT') {
         try {
           const body = await getRequestBody(req);
@@ -1635,11 +1903,280 @@ export const uiCommand = new Command('ui')
           }
 
           currentBAC = bac;
+
+          // Sync BAC back to manualArchitecture (bidirectional sync)
+          const projected = bacToArchitecture(bac);
+          if (manualArchitecture) {
+            manualArchitecture.components = projected.components.map(c => ({
+              id: c.id,
+              name: c.name,
+              type: c.type as ComponentType,
+              x: c.x ?? manualArchitecture!.components.find(mc => mc.id === c.id)?.x ?? 100,
+              y: c.y ?? manualArchitecture!.components.find(mc => mc.id === c.id)?.y ?? 100,
+            }));
+            manualArchitecture.connections = projected.connections.map(c => ({
+              from: c.from,
+              to: c.to,
+              label: c.label,
+              contract: c.contract,
+            }));
+            // Update component specs from BAC node contracts
+            for (const comp of projected.components) {
+              if (comp.spec) {
+                currentProject.componentSpecs[comp.id] = comp.spec;
+              }
+            }
+          }
+
+          const completeness = validateContractCompleteness(bac);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ bac: currentBAC, validation }));
+          res.end(JSON.stringify({ bac: currentBAC, validation, completeness, architecture: manualArchitecture }));
         } catch (error) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
+        }
+        return;
+      }
+
+      // Patch BAC with structured operations
+      if (url.pathname === '/api/bac' && req.method === 'PATCH') {
+        try {
+          const body = await getRequestBody(req);
+          const { patches } = JSON.parse(body) as { patches: BACPatch[] };
+
+          if (!currentBAC) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No BAC exists to patch' }));
+            return;
+          }
+
+          if (!patches || !Array.isArray(patches)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing patches array' }));
+            return;
+          }
+
+          const { bac: patched, architecture, completeness } = applyBacPatchesAndSync(patches);
+          const validation = validateBrickAppContract(patched);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ bac: patched, validation, completeness, architecture }));
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
+        }
+        return;
+      }
+
+      // Generate BAC from natural language intent
+      if (url.pathname === '/api/bac/from-intent' && req.method === 'POST') {
+        try {
+          const body = await getRequestBody(req);
+          const { intent } = JSON.parse(body) as { intent: string };
+
+          if (!intent || typeof intent !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing intent string' }));
+            return;
+          }
+
+          const config = getLLMConfig();
+          const messages: ChatMessage[] = [
+            { role: 'user', content: `Build an application: ${intent}` }
+          ];
+
+          const { chat } = await import('../../llm/client.js');
+          const response = await chat(INTENT_TO_BAC_PROMPT, messages, config);
+
+          // Parse the BAC JSON from LLM response
+          let jsonStr = response.content.trim();
+          if (jsonStr.startsWith('```')) {
+            jsonStr = jsonStr.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+          }
+
+          const bac = JSON.parse(jsonStr) as BrickAppContract;
+          const validation = validateBrickAppContract(bac);
+
+          if (validation.valid) {
+            currentBAC = bac;
+
+            // Project BAC to architecture for graph rendering
+            const projected = bacToArchitecture(bac);
+
+            // Auto-create manualArchitecture from BAC
+            manualArchitecture = {
+              name: bac.metadata.name || 'brick-app',
+              components: projected.components.map((c, i) => ({
+                id: c.id,
+                name: c.name,
+                type: c.type as ComponentType,
+                x: c.x ?? 150 + (i % 3) * 250,
+                y: c.y ?? 100 + Math.floor(i / 3) * 150,
+              })),
+              connections: projected.connections.map(c => ({
+                from: c.from,
+                to: c.to,
+                label: c.label,
+                contract: c.contract,
+              })),
+            };
+
+            // Update component specs
+            for (const comp of projected.components) {
+              if (comp.spec) {
+                currentProject.componentSpecs[comp.id] = comp.spec;
+              }
+            }
+
+            const completeness = validateContractCompleteness(bac);
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              bac,
+              validation,
+              completeness,
+              architecture: manualArchitecture,
+            }));
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Generated BAC failed validation', validation, rawBac: bac }));
+          }
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }));
+        }
+        return;
+      }
+
+      // Contract completeness check
+      if (url.pathname === '/api/bac/completeness' && req.method === 'GET') {
+        if (!currentBAC) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ complete: false, incompleteNodes: [], incompleteEdges: [], error: 'No BAC available' }));
+          return;
+        }
+        const completeness = validateContractCompleteness(currentBAC);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(completeness));
+        return;
+      }
+
+      // Puppeteer verification of running preview
+      const verifyMatch = url.pathname.match(/^\/api\/preview\/([^/]+)\/verify$/);
+      if (verifyMatch && req.method === 'POST') {
+        const projectId = verifyMatch[1];
+        try {
+          const puppeteer = await import('puppeteer');
+          const { getPreviewUrls } = await import('../../server/services/preview.js');
+          const { mkdir, writeFile: fsWriteFile } = await import('fs/promises');
+          const { join: pathJoin } = await import('path');
+
+          const urls = getPreviewUrls(projectId);
+          if (urls.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No running preview found for this project' }));
+            return;
+          }
+
+          const screenshotDir = pathJoin(process.cwd(), 'data', 'screenshots', projectId);
+          await mkdir(screenshotDir, { recursive: true });
+
+          const browser = await puppeteer.default.launch({
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+          });
+
+          const checks: Array<{
+            name: string;
+            url: string;
+            passed: boolean;
+            httpStatus?: number;
+            consoleErrors?: string[];
+            screenshotPath?: string;
+            error?: string;
+          }> = [];
+
+          for (let i = 0; i < urls.length; i++) {
+            const serviceUrl = urls[i];
+            const checkName = `service-${i}`;
+            const consoleErrors: string[] = [];
+
+            try {
+              const page = await browser.newPage();
+
+              // Collect console errors
+              page.on('console', msg => {
+                if (msg.type() === 'error') {
+                  consoleErrors.push(msg.text());
+                }
+              });
+
+              const response = await page.goto(serviceUrl, {
+                waitUntil: 'networkidle2',
+                timeout: 15000,
+              });
+
+              const status = response?.status() || 0;
+              const screenshotPath = pathJoin(screenshotDir, `${checkName}.png`);
+              await page.screenshot({ path: screenshotPath, fullPage: true });
+
+              checks.push({
+                name: checkName,
+                url: serviceUrl,
+                passed: status >= 200 && status < 400 && consoleErrors.length === 0,
+                httpStatus: status,
+                consoleErrors,
+                screenshotPath: `/api/preview/${projectId}/screenshots/${checkName}`,
+              });
+
+              await page.close();
+            } catch (err) {
+              checks.push({
+                name: checkName,
+                url: serviceUrl,
+                passed: false,
+                consoleErrors,
+                error: (err as Error).message,
+              });
+            }
+          }
+
+          await browser.close();
+
+          const result = {
+            passed: checks.every(c => c.passed),
+            checks,
+            timestamp: new Date().toISOString(),
+          };
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: (error as Error).message }));
+        }
+        return;
+      }
+
+      // Serve verification screenshots
+      const screenshotMatch = url.pathname.match(/^\/api\/preview\/([^/]+)\/screenshots\/([^/]+)$/);
+      if (screenshotMatch && req.method === 'GET') {
+        const [, projectId, checkName] = screenshotMatch;
+        try {
+          const { join: pathJoin } = await import('path');
+          const { readFile: fsReadFile } = await import('fs/promises');
+          const { existsSync } = await import('fs');
+          const screenshotPath = pathJoin(process.cwd(), 'data', 'screenshots', projectId, `${checkName}.png`);
+          if (!existsSync(screenshotPath)) {
+            res.writeHead(404);
+            res.end('Screenshot not found');
+            return;
+          }
+          const data = await fsReadFile(screenshotPath);
+          res.writeHead(200, { 'Content-Type': 'image/png' });
+          res.end(data);
+        } catch {
+          res.writeHead(500);
+          res.end('Error reading screenshot');
         }
         return;
       }
@@ -2426,8 +2963,6 @@ function getHtmlPage(): string {
       white-space: pre-wrap;
     }
     .chat-input-area {
-      padding: 12px;
-      border-top: 1px solid var(--border-color);
       flex-shrink: 0;
     }
     .chat-input {
@@ -2444,6 +2979,72 @@ function getHtmlPage(): string {
     }
     .chat-input:focus { outline: none; border-color: var(--accent); }
     .chat-input::placeholder { color: var(--text-secondary); }
+    .chat-input-box {
+      margin: 12px;
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      background: var(--bg-primary);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .chat-input-box:focus-within {
+      border-color: var(--accent);
+    }
+    .chat-input-box textarea {
+      width: 100%;
+      background: transparent;
+      border: none;
+      padding: 14px 16px 8px;
+      color: var(--text-primary);
+      font-size: 13px;
+      resize: none;
+      font-family: inherit;
+      outline: none;
+      box-sizing: border-box;
+    }
+    .chat-input-box textarea::placeholder {
+      color: var(--text-secondary);
+    }
+    .chat-input-box .input-toolbar {
+      display: flex;
+      align-items: center;
+      padding: 4px 8px 8px;
+      gap: 8px;
+    }
+    .chat-send-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: none;
+      background: var(--accent);
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: opacity 0.15s;
+    }
+    .chat-send-btn:hover { opacity: 0.85; }
+    .chat-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .chat-model-selector {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-family: inherit;
+    }
+    .chat-model-selector:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+    .chat-context-pills {
+      display: flex;
+      gap: 2px;
+      background: var(--bg-primary);
+      border-radius: 6px;
+      padding: 2px;
+    }
 
     /* Canvas Chat Mode Toggle (dark theme) */
     .canvas-mode-toggle {
@@ -6985,6 +7586,7 @@ function getHtmlPage(): string {
 
       // Dev mode (Claude Code) state
       const [canvasChatMode, setCanvasChatMode] = useState('design');
+      const [devContext, setDevContext] = useState('canvas'); // 'canvas' | 'docs' | 'code'
       const [devMessages, setDevMessages] = useState([
         { role: 'assistant', content: 'Claude Code connected. Send instructions to read, edit, and manage files in this project.\\n\\nExamples:\\n\\u2022 "Describe the architecture of this project"\\n\\u2022 "Add input validation to the API routes"\\n\\u2022 "Refactor the database queries to use prepared statements"' }
       ]);
@@ -6992,6 +7594,19 @@ function getHtmlPage(): string {
 
       // Command palette state
       const [showCommandPalette, setShowCommandPalette] = useState(false);
+
+      // BAC contract completeness state
+      const [bacCompleteness, setBacCompleteness] = useState(null);
+      const [bacData, setBacData] = useState(null);
+
+      // Verification state
+      const [verificationResult, setVerificationResult] = useState(null);
+      const [isVerifying, setIsVerifying] = useState(false);
+
+      // One-click Build pipeline state
+      const [buildRunning, setBuildRunning] = useState(false);
+      const [buildStep, setBuildStep] = useState(''); // current step label
+      const [buildSteps, setBuildSteps] = useState([]); // { label, status: 'pending'|'running'|'done'|'error' }[]
 
       // Detail panel tab state
       const [detailTab, setDetailTab] = useState('config'); // 'config' | 'code' | 'logs' | 'cost'
@@ -7355,6 +7970,24 @@ function getHtmlPage(): string {
         if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
       }, [messages, streamingContent]);
 
+      // Fetch BAC data and completeness when architecture changes
+      useEffect(() => {
+        if (!manualArch || manualArch.components.length === 0) {
+          setBacData(null);
+          setBacCompleteness(null);
+          return;
+        }
+        const timer = setTimeout(() => {
+          fetch('/api/bac').then(r => r.json()).then(data => {
+            setBacData(data.bac);
+          }).catch(() => {});
+          fetch('/api/bac/completeness').then(r => r.json()).then(data => {
+            setBacCompleteness(data);
+          }).catch(() => {});
+        }, 300);
+        return () => clearTimeout(timer);
+      }, [manualArch]);
+
       // Real-time cost estimation when components change
       useEffect(() => {
         const components = manualArch?.components || ir?.components || [];
@@ -7405,6 +8038,43 @@ function getHtmlPage(): string {
         setMessages(m => [...m, { role: 'user', content: msg }]);
         setLoading(true);
         setStreamingContent('');
+
+        // When no architecture exists yet, use intent-to-BAC for direct BAC generation
+        if (!manualArch && !ir) {
+          try {
+            setStreamingContent('Generating architecture from your description...');
+            const bacRes = await fetch('/api/bac/from-intent', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ intent: msg }),
+            });
+            const bacResult = await bacRes.json();
+            setStreamingContent('');
+
+            if (bacRes.ok && bacResult.architecture) {
+              setManualArch(bacResult.architecture);
+              setBacData(bacResult.bac);
+              if (bacResult.completeness) setBacCompleteness(bacResult.completeness);
+              const nodeCount = bacResult.architecture.components?.length || 0;
+              const edgeCount = bacResult.architecture.connections?.length || 0;
+              const completenessNote = bacResult.completeness?.complete
+                ? 'All contracts are pre-filled.'
+                : 'Some contracts need to be filled in the Contracts tab before generating code.';
+              setMessages(m => [...m, {
+                role: 'assistant',
+                content: 'Architecture generated from your description! ' + nodeCount + ' components, ' + edgeCount + ' connections. ' + completenessNote + ' You can edit the graph and contracts, then click Build to generate, preview, and verify the application.'
+              }]);
+              setAppView('editor');
+            } else {
+              setMessages(m => [...m, { role: 'assistant', content: 'Error: ' + (bacResult.error || 'Failed to generate architecture') }]);
+            }
+          } catch (err) {
+            setStreamingContent('');
+            setMessages(m => [...m, { role: 'assistant', content: 'Error generating architecture: ' + err.message }]);
+          }
+          setLoading(false);
+          return;
+        }
 
         try {
           const res = await fetch('/api/generate-stream', {
@@ -7474,7 +8144,11 @@ function getHtmlPage(): string {
           const res = await fetch('/api/agent/claude-code', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ instruction })
+            body: JSON.stringify({
+              instruction,
+              context: devContext,
+              ...(devContext === 'docs' ? { projectDocs } : {})
+            })
           });
 
           if (!res.ok) throw new Error('Request failed');
@@ -7529,6 +8203,22 @@ function getHtmlPage(): string {
                   }
                   setDevMessages(prev => prev.map(m => m._streaming ? { role: m.role, content: m.content } : m));
                   streamingText = '';
+                  break;
+                case 'bac_update':
+                  if (event.architecture) setManualArch(event.architecture);
+                  if (event.bac) setBacData(event.bac);
+                  if (event.completeness) setBacCompleteness(event.completeness);
+                  setDevMessages(prev => [...prev, {
+                    role: 'system',
+                    content: 'Graph updated: ' + (event.content || 'patches applied')
+                  }]);
+                  break;
+                case 'docs_update':
+                  if (event.docs) setProjectDocs(event.docs);
+                  setDevMessages(prev => [...prev, {
+                    role: 'system',
+                    content: 'Docs updated: ' + (event.content || 'documentation patched')
+                  }]);
                   break;
                 case 'error':
                   setDevMessages(prev => [...prev, { role: 'system', content: 'Error: ' + (event.content || 'Unknown error') }]);
@@ -7999,6 +8689,58 @@ function getHtmlPage(): string {
         }
       };
 
+      const verifyPreview = async (projectId) => {
+        setIsVerifying(true);
+        setVerificationResult(null);
+        try {
+          const res = await fetch('/api/preview/' + projectId + '/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          const data = await res.json();
+          setVerificationResult(data);
+        } catch (err) {
+          setVerificationResult({ passed: false, checks: [], error: err.message, timestamp: new Date().toISOString() });
+        }
+        setIsVerifying(false);
+      };
+
+      const fixWithClaudeCode = async (errorDetails) => {
+        const instruction = 'Fix the following preview verification errors:\\n\\n' + errorDetails + '\\n\\nAnalyze the error, find the relevant files, and fix the issue.';
+        setCanvasChatMode('dev');
+        setDevMessages(prev => [...prev, { role: 'user', content: instruction }]);
+        // Trigger the dev agent
+        try {
+          const res = await fetch('/api/agent/claude-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ instruction })
+          });
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let streamingText = '';
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const event = JSON.parse(line.slice(6));
+                  if (event.type === 'text') streamingText += event.content || '';
+                  if (event.type === 'done') {
+                    setDevMessages(prev => [...prev, { role: 'assistant', content: streamingText || 'Done.' }]);
+                  }
+                } catch {}
+              }
+            }
+          }
+        } catch {}
+      };
+
       const refreshPreviewStatus = async (projectId) => {
         try {
           const res = await fetch(API_URL + '/preview/' + projectId + '/status', { headers: getAuthHeaders() });
@@ -8176,6 +8918,178 @@ function getHtmlPage(): string {
         const key = connectionKey(conn.from, conn.to);
         const draft = connectionDrafts[key] || getConnectionDraft(conn);
         await updateConnectionContract(conn.from, conn.to, draft);
+      };
+
+      // BAC patch operations
+      const patchBacContract = async (patches) => {
+        try {
+          const res = await fetch('/api/bac', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patches }),
+          });
+          const data = await res.json();
+          if (data.bac) setBacData(data.bac);
+          if (data.completeness) setBacCompleteness(data.completeness);
+          if (data.architecture) {
+            setManualArch(data.architecture);
+            setIr(data.ir || ir);
+          }
+        } catch (e) { console.error('BAC patch failed', e); }
+      };
+
+      const updateBacNodeContract = (nodeId, field, value) => {
+        patchBacContract([{ op: 'update_node_contract', nodeId, fields: { [field]: value } }]);
+      };
+
+      const updateBacEdgeContract = (edgeId, field, value) => {
+        patchBacContract([{ op: 'update_edge_contract', edgeId, fields: { [field]: value } }]);
+      };
+
+      // Claude Code generation state
+      const [claudeGenerating, setClaudeGenerating] = useState(false);
+      const [claudeGenProgress, setClaudeGenProgress] = useState('');
+
+      const generateWithClaudeCode = async (nodeId) => {
+        setClaudeGenerating(true);
+        setClaudeGenProgress('Starting generation...');
+        try {
+          const res = await fetch('/api/agent/claude-code/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nodeId: nodeId || undefined }),
+          });
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const event = JSON.parse(line.slice(6));
+                  if (event.type === 'text') {
+                    setClaudeGenProgress(prev => prev + (event.content || ''));
+                  } else if (event.type === 'status') {
+                    setClaudeGenProgress(event.content || '');
+                  } else if (event.type === 'tool_use') {
+                    setClaudeGenProgress('Working on: ' + (event.filePath || event.tool || '...'));
+                  } else if (event.type === 'done') {
+                    setClaudeGenProgress('Generation complete! ' + (event.summary?.filesChanged?.length || 0) + ' files changed.');
+                  } else if (event.type === 'error') {
+                    setClaudeGenProgress('Error: ' + event.content);
+                  }
+                } catch {}
+              }
+            }
+          }
+        } catch (e) {
+          setClaudeGenProgress('Generation failed: ' + e.message);
+        }
+        setClaudeGenerating(false);
+      };
+
+      // One-click Build pipeline: validate → generate → preview → verify
+      const runBuildPipeline = async () => {
+        if (!currentProjectId || buildRunning) return;
+        setBuildRunning(true);
+        const steps = [
+          { label: 'Validate contracts', status: 'pending' },
+          { label: 'Generate code', status: 'pending' },
+          { label: 'Start Docker preview', status: 'pending' },
+          { label: 'Verify application', status: 'pending' },
+        ];
+        setBuildSteps([...steps]);
+
+        const updateStep = (idx, status) => {
+          steps[idx].status = status;
+          setBuildSteps([...steps]);
+          setBuildStep(status === 'running' ? steps[idx].label : '');
+        };
+
+        try {
+          // Step 1: Validate contract completeness
+          updateStep(0, 'running');
+          const compRes = await fetch('/api/bac/completeness');
+          const compData = await compRes.json();
+          if (!compData.complete) {
+            updateStep(0, 'error');
+            setBuildStep('Contracts incomplete — fill all TBD values first');
+            setBuildRunning(false);
+            return;
+          }
+          updateStep(0, 'done');
+
+          // Step 2: Generate code with Claude Code
+          updateStep(1, 'running');
+          const genRes = await fetch('/api/agent/claude-code/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          const genReader = genRes.body.getReader();
+          const genDecoder = new TextDecoder();
+          let genBuffer = '';
+          let genDone = false;
+          let genError = false;
+          while (!genDone) {
+            const { done, value } = await genReader.read();
+            if (done) break;
+            genBuffer += genDecoder.decode(value, { stream: true });
+            const lines = genBuffer.split('\\n');
+            genBuffer = lines.pop() || '';
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const event = JSON.parse(line.slice(6));
+                  if (event.type === 'done') genDone = true;
+                  if (event.type === 'error') { genError = true; genDone = true; }
+                } catch {}
+              }
+            }
+          }
+          if (genError) {
+            updateStep(1, 'error');
+            setBuildStep('Code generation failed');
+            setBuildRunning(false);
+            return;
+          }
+          updateStep(1, 'done');
+
+          // Step 3: Start Docker preview
+          updateStep(2, 'running');
+          const previewRes = await fetch(API_URL + '/preview/' + currentProjectId + '/start', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+          });
+          const previewData = await previewRes.json();
+          if (!previewRes.ok) {
+            updateStep(2, 'error');
+            setBuildStep('Preview failed: ' + (previewData.error || 'unknown'));
+            setBuildRunning(false);
+            return;
+          }
+          setPreviewSessions(prev => ({ ...prev, [currentProjectId]: { status: previewData.status, services: previewData.services || [], error: null } }));
+          updateStep(2, 'done');
+
+          // Step 4: Verify with Puppeteer
+          updateStep(3, 'running');
+          const verifyRes = await fetch('/api/preview/' + currentProjectId + '/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          const verifyData = await verifyRes.json();
+          setVerificationResult(verifyData);
+          updateStep(3, verifyData.passed ? 'done' : 'error');
+          setBuildStep(verifyData.passed ? 'Build complete — all checks passed!' : 'Build complete — verification has failures');
+        } catch (err) {
+          setBuildStep('Build failed: ' + err.message);
+        }
+        setBuildRunning(false);
       };
 
       const download = () => {
@@ -9463,6 +10377,22 @@ function getHtmlPage(): string {
             )
           ),
           React.createElement('div', { className: 'actions', style: { display: 'flex', gap: 8 } },
+            // One-click Build button
+            (ir || manualArch) && currentProjectId && React.createElement('button', {
+              style: {
+                background: buildRunning ? '#7C3AED' : 'linear-gradient(135deg, #7C3AED, #2563EB)',
+                color: 'white', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+                padding: '8px 16px', border: 'none', borderRadius: 8, cursor: buildRunning ? 'not-allowed' : 'pointer',
+                opacity: buildRunning ? 0.8 : 1
+              },
+              onClick: () => runBuildPipeline(),
+              disabled: buildRunning || claudeGenerating,
+              title: 'Validate contracts, generate code, start preview, and verify'
+            },
+              buildRunning && React.createElement('iconify-icon', { icon: 'solar:refresh-linear', style: { animation: 'spin 1s linear infinite' } }),
+              !buildRunning && React.createElement('iconify-icon', { icon: 'solar:rocket-2-bold' }),
+              buildRunning ? 'Building...' : 'Build'
+            ),
             // Run Locally button
             (ir || manualArch) && currentProjectId && (() => {
               const ps = previewSessions[currentProjectId];
@@ -9511,6 +10441,36 @@ function getHtmlPage(): string {
               React.createElement('iconify-icon', { icon: 'solar:settings-linear' })
             )
           )
+        ),
+
+        // Build pipeline progress bar
+        (buildRunning || buildSteps.length > 0) && React.createElement('div', {
+          style: {
+            position: 'fixed', top: 60, left: 0, right: 0, zIndex: 95,
+            background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)',
+            padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 16, fontSize: 12
+          }
+        },
+          buildSteps.map((step, i) =>
+            React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'center', gap: 6 } },
+              step.status === 'done' && React.createElement('span', { style: { color: '#22C55E' } }, '\\u2713'),
+              step.status === 'error' && React.createElement('span', { style: { color: '#EF4444' } }, '\\u2717'),
+              step.status === 'running' && React.createElement('iconify-icon', { icon: 'solar:refresh-linear', width: 12, style: { animation: 'spin 1s linear infinite', color: '#7C3AED' } }),
+              step.status === 'pending' && React.createElement('span', { style: { color: '#6B7280', width: 12, textAlign: 'center' } }, '\\u25CB'),
+              React.createElement('span', {
+                style: {
+                  color: step.status === 'running' ? '#7C3AED' : step.status === 'done' ? '#22C55E' : step.status === 'error' ? '#EF4444' : '#6B7280',
+                  fontWeight: step.status === 'running' ? 600 : 400
+                }
+              }, step.label),
+              i < buildSteps.length - 1 && React.createElement('span', { style: { color: '#4B5563', marginLeft: 8 } }, '\\u2192')
+            )
+          ),
+          buildStep && !buildRunning && React.createElement('span', { style: { marginLeft: 'auto', color: '#A3A3A3', fontSize: 11 } }, buildStep),
+          !buildRunning && buildSteps.length > 0 && React.createElement('button', {
+            onClick: () => { setBuildSteps([]); setBuildStep(''); },
+            style: { marginLeft: buildStep ? 8 : 'auto', background: 'none', border: 'none', color: '#6B7280', cursor: 'pointer', fontSize: 12 }
+          }, '\\u2715')
         ),
 
         // Sidebar icons for collapsed panels - show icon for each collapsed panel
@@ -9668,42 +10628,62 @@ function getHtmlPage(): string {
                 )
               )
             ),
-            React.createElement('textarea', {
-              className: 'chat-input', value: input,
-              onChange: e => {
-                const val = e.target.value;
-                setInput(val);
-                const words = val.toLowerCase().split(' ');
-                const lastWord = words[words.length - 1];
-                const match = AUTOCOMPLETE_PATTERNS.find(p => lastWord.startsWith(p.trigger) && lastWord.length >= 2);
-                if (match) {
-                  setAutocompleteItems(match.suggestions);
-                  setShowAutocomplete(true);
-                  setSelectedAutocomplete(0);
-                } else {
-                  setShowAutocomplete(false);
-                }
-              },
-              onKeyDown: e => {
-                if (showAutocomplete && autocompleteItems.length > 0) {
-                  if (e.key === 'ArrowDown') { e.preventDefault(); setSelectedAutocomplete(i => Math.min(i + 1, autocompleteItems.length - 1)); }
-                  else if (e.key === 'ArrowUp') { e.preventDefault(); setSelectedAutocomplete(i => Math.max(i - 1, 0)); }
-                  else if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
-                    e.preventDefault();
-                    setInput(autocompleteItems[selectedAutocomplete]);
+            React.createElement('div', { className: 'chat-input-box' },
+              React.createElement('textarea', {
+                value: input,
+                onChange: e => {
+                  const val = e.target.value;
+                  setInput(val);
+                  const words = val.toLowerCase().split(' ');
+                  const lastWord = words[words.length - 1];
+                  const match = AUTOCOMPLETE_PATTERNS.find(p => lastWord.startsWith(p.trigger) && lastWord.length >= 2);
+                  if (match) {
+                    setAutocompleteItems(match.suggestions);
+                    setShowAutocomplete(true);
+                    setSelectedAutocomplete(0);
+                  } else {
                     setShowAutocomplete(false);
                   }
-                  else if (e.key === 'Escape') { setShowAutocomplete(false); }
-                } else if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              },
-              onBlur: () => setTimeout(() => setShowAutocomplete(false), 200),
-              placeholder: 'Describe your app...', rows: 2, disabled: loading
-            }),
-            React.createElement('button', { className: 'primary', onClick: () => sendMessage(), disabled: loading, style: { width: '100%' } },
-              loading ? 'Generating...' : 'Send'
+                },
+                onKeyDown: e => {
+                  if (showAutocomplete && autocompleteItems.length > 0) {
+                    if (e.key === 'ArrowDown') { e.preventDefault(); setSelectedAutocomplete(i => Math.min(i + 1, autocompleteItems.length - 1)); }
+                    else if (e.key === 'ArrowUp') { e.preventDefault(); setSelectedAutocomplete(i => Math.max(i - 1, 0)); }
+                    else if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                      e.preventDefault();
+                      setInput(autocompleteItems[selectedAutocomplete]);
+                      setShowAutocomplete(false);
+                    }
+                    else if (e.key === 'Escape') { setShowAutocomplete(false); }
+                  } else if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                },
+                onBlur: () => setTimeout(() => setShowAutocomplete(false), 200),
+                placeholder: 'Describe your app...', rows: 2, disabled: loading
+              }),
+              React.createElement('div', { className: 'input-toolbar' },
+                React.createElement('select', {
+                  className: 'chat-model-selector',
+                  value: selectedModel,
+                  onChange: e => {
+                    const m = e.target.value;
+                    setSelectedModel(m);
+                    fetch('/api/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m }) });
+                  }
+                },
+                  models.map(m => React.createElement('option', { key: m.id, value: m.id }, m.name))
+                ),
+                React.createElement('div', { style: { flex: 1 } }),
+                React.createElement('button', {
+                  className: 'chat-send-btn',
+                  onClick: () => sendMessage(),
+                  disabled: loading
+                },
+                  React.createElement('iconify-icon', { icon: 'solar:arrow-up-linear', width: 18 })
+                )
+              )
             )
           ),
 
@@ -9723,27 +10703,47 @@ function getHtmlPage(): string {
             isDevProcessing && React.createElement('button', { className: 'dev-cancel-btn', onClick: cancelDev }, 'Cancel')
           ),
           canvasChatMode === 'dev' && React.createElement('div', { className: 'chat-input-area' },
-            React.createElement('textarea', {
-              className: 'chat-input', value: input,
-              onChange: e => setInput(e.target.value),
-              onKeyDown: e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendDevMessage();
-                }
-              },
-              placeholder: 'Tell Claude Code what to build...', rows: 2, disabled: isDevProcessing
-            }),
-            React.createElement('div', { style: { display: 'flex', gap: '8px' } },
-              React.createElement('button', { className: 'primary', onClick: () => sendDevMessage(), disabled: isDevProcessing, style: { flex: 1 } },
-                isDevProcessing ? 'Running...' : 'Send to Claude Code'
+            React.createElement('div', { style: { padding: '0 12px 4px', display: 'flex', alignItems: 'center', gap: 8 } },
+              React.createElement('div', { className: 'chat-context-pills' },
+                ['canvas', 'docs', 'code'].map(ctx =>
+                  React.createElement('button', {
+                    key: ctx,
+                    className: 'canvas-mode-btn' + (devContext === ctx ? ' active' : ''),
+                    onClick: () => setDevContext(ctx)
+                  }, ctx.charAt(0).toUpperCase() + ctx.slice(1))
+                )
               ),
               React.createElement('button', {
                 onClick: clearDevConversation,
                 disabled: isDevProcessing,
-                title: 'Clear conversation and start fresh',
-                style: { padding: '8px 12px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '12px' }
+                title: 'Clear conversation',
+                style: { marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 11 }
               }, 'Clear')
+            ),
+            React.createElement('div', { className: 'chat-input-box' },
+              React.createElement('textarea', {
+                value: input,
+                onChange: e => setInput(e.target.value),
+                onKeyDown: e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendDevMessage();
+                  }
+                },
+                placeholder: devContext === 'canvas' ? 'Edit the architecture graph...' : devContext === 'docs' ? 'Update project documentation...' : 'Tell Claude Code what to build...',
+                rows: 2, disabled: isDevProcessing
+              }),
+              React.createElement('div', { className: 'input-toolbar' },
+                React.createElement('span', { style: { fontSize: 12, color: 'var(--text-secondary)', paddingLeft: 8 } }, 'Claude Code'),
+                React.createElement('div', { style: { flex: 1 } }),
+                React.createElement('button', {
+                  className: 'chat-send-btn',
+                  onClick: () => sendDevMessage(),
+                  disabled: isDevProcessing
+                },
+                  React.createElement('iconify-icon', { icon: 'solar:arrow-up-linear', width: 18 })
+                )
+              )
             )
           )
         ),
@@ -9947,11 +10947,22 @@ function getHtmlPage(): string {
                   React.createElement('div', { className: 'empty-state', style: { padding: 20, textAlign: 'center' } },
                     React.createElement('iconify-icon', { icon: 'solar:code-square-linear', width: 32, style: { color: 'var(--accent)', marginBottom: 12 } }),
                     React.createElement('p', { style: { marginBottom: 16 } }, 'Generate code for your architecture'),
+                    bacCompleteness && !bacCompleteness.complete && React.createElement('div', {
+                      style: { padding: '8px 12px', background: '#FEF2F2', borderRadius: 6, marginBottom: 12, fontSize: 12, color: '#DC2626', textAlign: 'left' }
+                    },
+                      React.createElement('strong', null, 'Incomplete Contracts'),
+                      React.createElement('div', { style: { marginTop: 4 } },
+                        (bacCompleteness.incompleteNodes || []).map(n =>
+                          React.createElement('div', { key: n.nodeId }, n.nodeName + ': ' + n.fields.join(', '))
+                        )
+                      )
+                    ),
                     ir && React.createElement('button', {
                       className: 'primary',
                       onClick: () => generateProjectCode(),
-                      disabled: isGeneratingCode,
-                      style: { display: 'flex', alignItems: 'center', gap: 8, margin: '0 auto' }
+                      disabled: isGeneratingCode || (bacCompleteness && !bacCompleteness.complete),
+                      style: { display: 'flex', alignItems: 'center', gap: 8, margin: '0 auto' },
+                      title: bacCompleteness && !bacCompleteness.complete ? 'Fill all contracts before generating code' : ''
                     },
                       React.createElement('iconify-icon', { icon: 'solar:magic-stick-3-linear', width: 16 }),
                       'Generate Code'
@@ -10027,6 +11038,50 @@ function getHtmlPage(): string {
             ),
             previewSessions[currentProjectId].error && React.createElement('div', { className: 'preview-error', style: { maxHeight: 60, overflow: 'hidden', textOverflow: 'ellipsis' } },
               previewSessions[currentProjectId].error.split('\\n')[0].slice(0, 100)
+            ),
+            // Embedded iframe for the first available service
+            (() => {
+              const firstUrl = (previewSessions[currentProjectId].services || []).find(s => s.url)?.url;
+              return firstUrl && React.createElement('iframe', {
+                src: firstUrl,
+                style: { width: '100%', height: 300, border: '1px solid var(--border-color)', borderRadius: 6, marginTop: 8, background: 'white' },
+                title: 'Preview'
+              });
+            })(),
+            // Verify button
+            React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
+              React.createElement('button', {
+                onClick: () => verifyPreview(currentProjectId),
+                disabled: isVerifying,
+                style: { flex: 1, padding: '6px 12px', fontSize: 12, background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 6, cursor: 'pointer', color: 'var(--text-primary)' }
+              }, isVerifying ? 'Verifying...' : 'Verify')
+            ),
+            // Verification results
+            verificationResult && React.createElement('div', {
+              style: { marginTop: 8, padding: 10, background: verificationResult.passed ? '#F0FDF4' : '#FEF2F2', borderRadius: 6, fontSize: 12 }
+            },
+              React.createElement('div', { style: { fontWeight: 600, marginBottom: 6, color: verificationResult.passed ? '#16A34A' : '#DC2626' } },
+                verificationResult.passed ? 'All checks passed' : 'Verification failed'
+              ),
+              (verificationResult.checks || []).map((check, i) =>
+                React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
+                  React.createElement('span', { style: { color: check.passed ? '#16A34A' : '#DC2626' } }, check.passed ? '✓' : '✗'),
+                  React.createElement('span', null, check.name + ' (' + (check.httpStatus || 'N/A') + ')'),
+                  check.screenshotPath && React.createElement('a', {
+                    href: check.screenshotPath, target: '_blank',
+                    style: { marginLeft: 'auto', fontSize: 10, color: 'var(--accent)' }
+                  }, 'screenshot'),
+                  check.error && React.createElement('span', { style: { color: '#DC2626', fontSize: 10, marginLeft: 4 } }, check.error.slice(0, 50)),
+                  !check.passed && React.createElement('button', {
+                    onClick: () => fixWithClaudeCode(
+                      'Service: ' + check.url + '\\nHTTP Status: ' + (check.httpStatus || 'N/A') +
+                      '\\nConsole Errors: ' + (check.consoleErrors || []).join('; ') +
+                      (check.error ? '\\nError: ' + check.error : '')
+                    ),
+                    style: { marginLeft: 4, padding: '2px 6px', fontSize: 10, background: 'var(--accent)', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }
+                  }, 'Fix')
+                )
+              )
             )
           ),
 
@@ -10162,7 +11217,18 @@ function getHtmlPage(): string {
               React.createElement('button', {
                 className: 'detail-tab' + (detailTab === 'cost' ? ' active' : ''),
                 onClick: () => setDetailTab('cost')
-              }, 'Cost')
+              }, 'Cost'),
+              React.createElement('button', {
+                className: 'detail-tab' + (detailTab === 'contracts' ? ' active' : ''),
+                onClick: () => setDetailTab('contracts')
+              },
+                'Contracts',
+                bacCompleteness && !bacCompleteness.complete &&
+                  bacCompleteness.incompleteNodes?.some(n => n.nodeId === selectedNode?.id) &&
+                  React.createElement('span', {
+                    style: { marginLeft: 4, width: 8, height: 8, borderRadius: '50%', background: '#EF4444', display: 'inline-block' }
+                  })
+              )
             ),
             // Tab Content - Config
             detailTab === 'config' && React.createElement('div', { className: 'detail-content' },
@@ -10504,6 +11570,96 @@ function getHtmlPage(): string {
                   'Costs are estimates based on DigitalOcean App Platform pricing'
                 )
               )
+            ),
+            // Tab Content - Contracts (BAC node/edge contracts)
+            detailTab === 'contracts' && React.createElement('div', { className: 'detail-content' },
+              (() => {
+                const nodeContract = bacData?.systemContracts?.nodes?.find(n => n.nodeId === selectedNode?.id);
+                const nodeEdges = (bacData?.systemContracts?.edges || []).filter(
+                  e => e.fromNodeId === selectedNode?.id || e.toNodeId === selectedNode?.id
+                );
+                const isIncomplete = bacCompleteness?.incompleteNodes?.some(n => n.nodeId === selectedNode?.id);
+                return React.createElement(React.Fragment, null,
+                  isIncomplete && React.createElement('div', {
+                    style: { padding: '8px 12px', background: '#FEF2F2', borderRadius: 6, marginBottom: 12, fontSize: 12, color: '#DC2626', display: 'flex', alignItems: 'center', gap: 6 }
+                  },
+                    React.createElement('span', { style: { fontSize: 14 } }, '!'),
+                    'This node has incomplete contracts. Fill in all fields before generating code.'
+                  ),
+                  React.createElement('div', { className: 'spec-section' },
+                    React.createElement('div', { className: 'spec-label' }, 'Input Contract'),
+                    React.createElement('textarea', {
+                      className: 'spec-textarea',
+                      value: nodeContract?.inputContract || 'TBD',
+                      onChange: e => updateBacNodeContract(selectedNode.id, 'inputContract', e.target.value),
+                      placeholder: 'Define the input contract for this node...',
+                      style: { minHeight: 60 }
+                    })
+                  ),
+                  React.createElement('div', { className: 'spec-section' },
+                    React.createElement('div', { className: 'spec-label' }, 'Output Contract'),
+                    React.createElement('textarea', {
+                      className: 'spec-textarea',
+                      value: nodeContract?.outputContract || 'TBD',
+                      onChange: e => updateBacNodeContract(selectedNode.id, 'outputContract', e.target.value),
+                      placeholder: 'Define the output contract for this node...',
+                      style: { minHeight: 60 }
+                    })
+                  ),
+                  React.createElement('div', { className: 'spec-section' },
+                    React.createElement('div', { className: 'spec-label' }, 'Description'),
+                    React.createElement('textarea', {
+                      className: 'spec-textarea',
+                      value: nodeContract?.description || '',
+                      onChange: e => updateBacNodeContract(selectedNode.id, 'description', e.target.value),
+                      placeholder: 'Component description...',
+                      style: { minHeight: 40 }
+                    })
+                  ),
+                  nodeEdges.length > 0 && React.createElement('div', { className: 'spec-divider' }),
+                  nodeEdges.length > 0 && React.createElement('div', { className: 'spec-section' },
+                    React.createElement('div', { className: 'spec-label' }, 'Edge Contracts'),
+                    ...nodeEdges.map(edge =>
+                      React.createElement('div', { key: edge.id, style: { marginBottom: 12, padding: 8, background: 'var(--bg-secondary)', borderRadius: 6 } },
+                        React.createElement('div', { style: { fontSize: 11, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' } },
+                          edge.fromNodeId + ' → ' + edge.toNodeId + (edge.label ? ' (' + edge.label + ')' : '')
+                        ),
+                        React.createElement('div', { style: { fontSize: 11, marginBottom: 4 } }, 'Source Output:'),
+                        React.createElement('textarea', {
+                          className: 'spec-textarea',
+                          value: edge.sourceOutputContract || 'TBD',
+                          onChange: e => updateBacEdgeContract(edge.id, 'sourceOutputContract', e.target.value),
+                          style: { minHeight: 30, fontSize: 11 }
+                        }),
+                        React.createElement('div', { style: { fontSize: 11, marginBottom: 4, marginTop: 4 } }, 'Target Input:'),
+                        React.createElement('textarea', {
+                          className: 'spec-textarea',
+                          value: edge.targetInputContract || 'TBD',
+                          onChange: e => updateBacEdgeContract(edge.id, 'targetInputContract', e.target.value),
+                          style: { minHeight: 30, fontSize: 11 }
+                        })
+                      )
+                    )
+                  ),
+                  React.createElement('div', { className: 'spec-divider' }),
+                  React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                    React.createElement('button', {
+                      className: 'primary',
+                      onClick: () => generateWithClaudeCode(selectedNode.id),
+                      disabled: claudeGenerating || (bacCompleteness && !bacCompleteness.complete),
+                      style: { flex: 1, fontSize: 12 }
+                    }, claudeGenerating ? 'Generating...' : 'Generate with Claude Code'),
+                    React.createElement('button', {
+                      onClick: () => generateWithClaudeCode(null),
+                      disabled: claudeGenerating || (bacCompleteness && !bacCompleteness.complete),
+                      style: { flex: 1, fontSize: 12 }
+                    }, 'Generate All')
+                  ),
+                  claudeGenProgress && React.createElement('div', {
+                    style: { marginTop: 8, padding: 8, background: 'var(--bg-secondary)', borderRadius: 6, fontSize: 11, maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap' }
+                  }, claudeGenProgress)
+                );
+              })()
             ),
             // Footer
             React.createElement('div', { className: 'detail-footer' },
