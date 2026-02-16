@@ -8,7 +8,7 @@ import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import type { Project } from '../db/schema.js';
 import { generateDockerCompose, generateDockerfile, generateNginxConfig } from '../../generator/docker-compose-generator.js';
-import { loadArtifacts, hasStashedArtifacts } from './artifacts.js';
+import { loadArtifacts, hasStashedArtifacts, getArtifactStructure } from './artifacts.js';
 import YAML from 'yaml';
 
 const execAsync = promisify(exec);
@@ -353,6 +353,57 @@ export async function* streamPreviewLogs(
   for await (const chunk of logProcess.stderr) {
     yield `[ERROR] ${chunk.toString()}`;
   }
+}
+
+/**
+ * Get all running preview URLs for a project.
+ */
+export function getPreviewUrls(projectId: string): string[] {
+  const session = activePreviews.get(projectId);
+  if (!session || session.status !== 'running') return [];
+  return session.services
+    .filter(s => s.url)
+    .map(s => s.url!);
+}
+
+/**
+ * Start preview using real artifacts instead of placeholders.
+ * Detects framework and generates appropriate Dockerfiles.
+ */
+export async function previewFromArtifacts(
+  slug: string,
+  project: Project
+): Promise<PreviewSession> {
+  const dockerAvailable = await checkDocker();
+  if (!dockerAvailable) {
+    throw new Error('Docker is not installed or not running.');
+  }
+
+  const structure = await getArtifactStructure(slug);
+  if (!structure || structure.totalFiles === 0) {
+    throw new Error('No artifacts found. Generate code first.');
+  }
+
+  // Use the standard startPreview which already copies artifacts
+  return startPreview(project);
+}
+
+/**
+ * Rebuild preview after re-generation — stops, re-copies artifacts, and restarts.
+ */
+export async function rebuildPreview(project: Project): Promise<PreviewSession> {
+  const existing = activePreviews.get(project.id);
+  if (existing && (existing.status === 'running' || existing.status === 'starting')) {
+    const previewDir = getPreviewDirectory(project.id);
+    try {
+      await execAsync(`docker compose -f ${join(previewDir, 'docker-compose.yml')} down --remove-orphans`);
+    } catch {
+      // Ignore
+    }
+    activePreviews.delete(project.id);
+  }
+
+  return startPreview(project);
 }
 
 // Refresh preview status from Docker

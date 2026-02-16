@@ -1,0 +1,12 @@
+node_modules
+dist
+frontend/node_modules
+frontend/dist
+.git
+.do
+.env
+.env.*
+!.env.production.example
+*.md
+tests
+.claude

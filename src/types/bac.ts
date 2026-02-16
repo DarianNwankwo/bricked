@@ -122,6 +122,8 @@ export interface BACNodeContract {
   inputContract: string;
   outputContract: string;
   notes?: string;
+  x?: number;
+  y?: number;
 }
 
 export interface BACEdgeContract {
@@ -155,3 +157,14 @@ export interface BrickAppContract {
   aiOpportunityAssessment: AIOpportunityAssessment[];
   aiFlows: AIFlowSpec[];
 }
+
+// Structured patch operations for BAC editing
+export type BACPatch =
+  | { op: 'update_node_contract'; nodeId: string; fields: Partial<Omit<BACNodeContract, 'nodeId'>> }
+  | { op: 'update_edge_contract'; edgeId: string; fields: Partial<Omit<BACEdgeContract, 'id'>> }
+  | { op: 'update_metadata'; fields: Partial<BACMetadata> }
+  | { op: 'update_product_outcome'; fields: Partial<BACProductOutcome> }
+  | { op: 'add_node'; node: BACNodeContract }
+  | { op: 'remove_node'; nodeId: string }
+  | { op: 'add_edge'; edge: BACEdgeContract }
+  | { op: 'remove_edge'; edgeId: string };

@@ -1,7 +1,8 @@
 import { chat, chatStream, type ChatMessage } from '../llm/client.js';
-import { CODE_EDIT_PROMPT, CODE_GENERATOR_PROMPT, formatComponentForPrompt } from './prompts.js';
+import { CODE_EDIT_PROMPT, CODE_GENERATOR_PROMPT, BAC_CODE_GENERATOR_PROMPT, formatComponentForPrompt, formatBACForPrompt, formatNodeContractForPrompt } from './prompts.js';
 import type { LLMConfig } from '../llm/config.js';
 import type { FilePlan, Component } from './planner.js';
+import type { BrickAppContract } from '../types/bac.js';
 
 export interface GeneratedFile {
   path: string;
@@ -299,4 +300,77 @@ function topologicalSort(files: FilePlan[]): FilePlan[] {
   }
 
   return result;
+}
+
+// BAC-driven generation interfaces
+
+export interface GenerateFileFromBACParams extends GenerateFileParams {
+  bac: BrickAppContract;
+}
+
+/**
+ * Generate a file with full BAC contract context.
+ * Includes the node's contract + adjacent edge contracts in the prompt.
+ */
+export async function generateFileFromBAC(params: GenerateFileFromBACParams): Promise<GeneratedFile> {
+  const { file, components, existingFiles, config, bac } = params;
+
+  const component = file.componentId
+    ? components.find(c => c.id === file.componentId)
+    : null;
+
+  const dependencyContext = file.dependencies
+    .filter(dep => existingFiles.has(dep))
+    .map(dep => `// ${dep}\n${existingFiles.get(dep)?.slice(0, 500)}...`)
+    .join('\n\n');
+
+  // Build BAC-aware prompt
+  let prompt = `Generate the file: ${file.path}\nPurpose: ${file.purpose}\n`;
+
+  // Add full BAC context summary
+  prompt += `\n## Brick App Contract Context\n${formatBACForPrompt(bac)}\n`;
+
+  // Add focused node contract if this file belongs to a node
+  if (file.componentId) {
+    const nodeContext = formatNodeContractForPrompt(file.componentId, bac);
+    if (nodeContext) {
+      prompt += `\n## Focus: This file implements\n${nodeContext}\n`;
+    }
+  }
+
+  if (component) {
+    prompt += `\nComponent Spec:\n${formatComponentForPrompt(component)}\n`;
+  }
+
+  if (dependencyContext) {
+    prompt += `\nRelated files for context:\n${dependencyContext}\n`;
+  }
+
+  // Add overall architecture context for key files
+  if (file.path.includes('package.json') || file.path.includes('index') || file.path.includes('main')) {
+    prompt += `\nFull architecture context:\n${components.map(c => `- ${c.name} (${c.type}): ${c.spec?.description || 'No description'}`).join('\n')}\n`;
+  }
+
+  if (file.path.endsWith('package.json')) {
+    prompt += '\nInclude appropriate dependencies for the tech stack. Use recent stable versions.\n';
+  } else if (file.path.includes('Dockerfile')) {
+    prompt += '\nCreate a multi-stage Dockerfile optimized for production. Use slim base images.\n';
+  } else if (file.path.endsWith('.env.example')) {
+    prompt += '\nInclude all environment variables needed, with placeholder values and comments.\n';
+  }
+
+  const messages: ChatMessage[] = [{ role: 'user', content: prompt }];
+  const response = await chat(BAC_CODE_GENERATOR_PROMPT, messages, config);
+
+  let content = response.content.trim();
+  if (content.startsWith('```')) {
+    content = content.replace(/```\w*\n?/g, '').replace(/```$/g, '').trim();
+  }
+
+  return {
+    path: file.path,
+    content,
+    componentId: file.componentId,
+    generatedAt: new Date(),
+  };
 }
