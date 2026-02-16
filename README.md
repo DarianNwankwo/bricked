@@ -157,9 +157,85 @@ brick-by-brick/
 │   │   └── services/      # Session manager, LLM, codegen
 │   ├── worker/            # BullMQ background jobs
 │   └── landing/           # Marketing pages
+├── backlog/               # Feature specs for incomplete work (see Backlog section)
 ├── docker-compose.yml     # Postgres + Redis + Web + Worker
 ├── Dockerfile.web         # 3-stage: backend-builder, frontend-builder, production
 └── Dockerfile.worker      # Worker service
+```
+
+## What Works Today
+
+The core design-to-generate loop is functional for single-user, single-session workflows:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Auth (signup/login) | Working | JWT-based, persists to DB |
+| Dashboard & project CRUD | Working | Full DB persistence |
+| Architecture canvas | Working | Nodes, edges, handles, drag-and-drop, auto-layout |
+| Component detail panel | Working | Specs auto-save to session |
+| Edge editing | Working | Label + data contract editing |
+| AI chat | Working | Streaming LLM chat with architecture updates |
+| Code generation | Working | SSE streaming, targeted edits |
+| Code editor | Working | Monaco with syntax highlighting, manual edits |
+| Template loading | Working | 9 pre-built templates |
+| Project rename | Working | Syncs to both session and DB |
+| Completeness indicators | Working | Red/green dots on nodes |
+| Feature board (Kanban) | UI only | Drag-and-drop works, no backend persistence |
+| Docker preview | UI ready | Backend endpoints exist, needs end-to-end verification |
+| Docs tab | Placeholder | Backend agent exists but not wired to UI |
+| GitHub integration | Partial | Backend OAuth exists, frontend only has connect button |
+
+## Backlog
+
+The following features are incomplete or have known gaps. Each item has a detailed specification in the [`backlog/`](./backlog/) directory with implementation context, affected files, and acceptance criteria.
+
+### Critical — Data Loss Risk
+
+| # | Feature | Detail | Issue |
+|---|---------|--------|-------|
+| [001](./backlog/001-session-persistence.md) | Session-to-DB Persistence | Architecture, specs, BAC live in-memory only | Server restart loses all design work |
+| [002](./backlog/002-unified-project-system.md) | Unified Project System | Two conflicting save systems (DB vs in-memory) | Data divergence between dashboard and workspace |
+
+### High — Core Functionality Gaps
+
+| # | Feature | Detail | Issue |
+|---|---------|--------|-------|
+| [006](./backlog/006-multi-user-session-isolation.md) | Multi-User Session Isolation | Sessions are global, not per-user | Two users can corrupt each other's work |
+| [009](./backlog/009-generated-files-persistence.md) | Generated File Persistence | Code files only in memory + optional disk stash | Files lost on refresh unless explicitly saved |
+| [010](./backlog/010-deploy-pipeline-integrity.md) | Deploy Pipeline Integrity | Deploy reads stale DB architecture | Deployed app doesn't match canvas design |
+
+### Medium — Missing Features
+
+| # | Feature | Detail | Issue |
+|---|---------|--------|-------|
+| [003](./backlog/003-feature-board-backend.md) | Feature Board Backend | Kanban UI works but no persistence | Features lost on page reload |
+| [004](./backlog/004-docs-generation-tab.md) | Docs Generation Tab | Backend docs agent exists | UI shows placeholder, not wired to agent |
+| [005](./backlog/005-chat-history-persistence.md) | Chat History Persistence | Messages in React state only | Conversation lost on refresh |
+
+### Low — Polish & Integrations
+
+| # | Feature | Detail | Issue |
+|---|---------|--------|-------|
+| [007](./backlog/007-inner-components-persistence.md) | Inner Components Persistence | UI exists in detail panel | Add/edit works but never saves to backend |
+| [008](./backlog/008-github-integration.md) | GitHub Integration | Backend OAuth flow exists | No push-to-repo UI, no callback handler |
+| [011](./backlog/011-settings-model-persistence.md) | LLM Model Persistence | Model selection in session only | Reverts to default on new tab or restart |
+
+### Dependency Graph
+
+Items 001 and 002 are foundational — most other backlog items become simpler once session state auto-syncs to the database.
+
+```
+001 Session Persistence ─┬─→ 009 File Persistence ─→ 010 Deploy Integrity
+                         ├─→ 005 Chat Persistence
+                         └─→ 011 Model Persistence
+
+002 Unified Projects ────→ 003 Feature Board (needs project-scoped DB tables)
+
+006 Session Isolation ───→ (independent, but should be done before multi-user launch)
+
+004 Docs Tab ────────────→ (independent, backend agent already exists)
+007 Inner Components ────→ (independent, extends existing ComponentSpec)
+008 GitHub Integration ──→ (independent, backend routes already exist)
 ```
 
 ## Environment Variables
