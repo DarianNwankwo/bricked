@@ -20,12 +20,17 @@ import { createInterface, type Interface as ReadlineInterface } from 'readline';
 // ---------------------------------------------------------------------------
 
 export interface ClaudeCodeEvent {
-  type: 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'done';
+  type: 'text' | 'tool_use' | 'tool_result' | 'status' | 'error' | 'done' | 'bac_update' | 'docs_update';
   content?: string;
   tool?: string;
   filePath?: string;
   fileAction?: string;
   summary?: { filesChanged: string[]; duration: number };
+  patches?: unknown[];
+  bac?: unknown;
+  architecture?: unknown;
+  completeness?: unknown;
+  docs?: string;
 }
 
 export interface ConversationEntry {
@@ -186,7 +191,8 @@ function cleanup(): void {
  */
 export async function* sendMessage(
   instruction: string,
-  cwd: string
+  cwd: string,
+  options?: { systemContext?: string }
 ): AsyncGenerator<ClaudeCodeEvent> {
   if (isProcessing) {
     yield { type: 'error', content: 'A message is already being processed. Wait or cancel first.' };
@@ -202,17 +208,22 @@ export async function* sendMessage(
   try {
     ensureProcess(cwd);
 
+    // Prepend BAC/system context if provided
+    const fullInstruction = options?.systemContext
+      ? `${options.systemContext}\n\n---\n\n${instruction}`
+      : instruction;
+
     // Record user message in history
     conversationHistory.push({
       role: 'user',
-      content: instruction,
+      content: fullInstruction,
       timestamp: Date.now(),
     });
 
     // Write NDJSON message to Claude's stdin
     const stdinMessage = JSON.stringify({
       type: 'user',
-      message: { role: 'user', content: instruction },
+      message: { role: 'user', content: fullInstruction },
       session_id: sessionId || 'default',
       parent_tool_use_id: null,
     });

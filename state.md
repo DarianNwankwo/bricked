@@ -138,3 +138,96 @@ Dashboard and API both sort projects by `createdAt` (newest first), not by last-
 - Cost breakdown bar chart by project
 - Navigation: Dashboard ↔ Projects ↔ Settings all cross-linked in sidebars
 - Logo/back clicks in editor return to dashboard
+
+---
+
+## AutoMaker Competitive Analysis & Feature Adoption Plan
+
+**Reference**: [AutoMaker](https://github.com/AutoMaker-Org/automaker) — local, open-source agentic IDE (2.9K stars, TypeScript/React/Electron, MIT-like license, no longer actively maintained). Analyzed Feb 2026.
+
+**AutoMaker's model**: Kanban board → agents autonomously implement features in isolated git worktrees → user reviews diffs → merge. No deployment capability — everything stays local.
+
+**Brick-by-Brick's advantage**: We have the deployment pipeline (Mermaid → AppSpec → CodeGen → Docker Preview → DigitalOcean Deploy). AutoMaker can *write* code. We can *ship* it. Combine both = "vibe deploy."
+
+### Tier 1: High-Impact, Build Now
+
+**1. Git Worktree Isolation Per Feature**
+- AutoMaker's best architectural decision — each feature gets its own git worktree, agents work freely without polluting main branch, merge on approval
+- **Current gap**: `src/agent/claude-code.ts` operates on live project files. If agent goes off the rails, it corrupts working state. Worktrees give rollback for free
+- **Implementation**: Before spawning `executeClaudeCode()`, create worktree (`git worktree add`), point Claude at it, merge on approval. Thin wrapper around existing claude-code.ts
+
+**2. Auto-Mode: Parallel Agent Execution with Concurrency Control**
+- AutoMaker's largest service (220KB) orchestrates multiple features executing simultaneously: per-project concurrency limits, lease counting, consecutive failure detection, feature dependency resolution
+- **Current gap**: Agent orchestrator (`src/agent/orchestrator.ts`) is a skeleton. BAC, codegen, docs agents exist but can't run in parallel or queue features
+- **Implementation**: Worker queue (`src/server/queue/`) is the foundation. Add concurrency limits per project, dependency resolution between BAC/codegen steps, status loop that picks up next pending feature
+- **Key patterns from AutoMaker**: `acquireRunningFeature()` / `releaseRunningFeature()` with lease counting, `autoLoopsByProject` Map keyed by `projectPath::branchName`, consecutive failure detection that pauses the loop
+
+**3. Kanban Board as Primary Interface**
+- AutoMaker's Kanban isn't a task tracker — it's the **control surface** for the agent system. Features move through: `Backlog → In Progress → Waiting Approval → Done`. Moving a card triggers agent execution
+- **Current gap**: Dashboard shows project cards with stats but no feature-level task management
+- **Implementation**: Add `features` table to DB (status, project FK, dependencies, description). Dashboard gets Kanban view per project. Moving card to "Build" triggers codegen pipeline. Use `@dnd-kit` for drag-and-drop (what AutoMaker uses)
+
+**4. Plan Approval Workflow (Human-in-the-Loop)**
+- AutoMaker generates structured plan before agents write code, presents for user review/approval/rejection
+- **Current gap**: BAC flow derives specs but no explicit approval gate between "here's what I'll build" and "building it"
+- **Implementation**: After BAC derivation, emit `plan_ready` event via WebSocket. UI shows plan. User approves → codegen runs. User edits → re-derive. Maps to existing BAC → Codegen pipeline
+
+### Tier 2: Medium-Term, Adapt to Our Model
+
+**5. Real-Time Agent Streaming via WebSocket**
+- AutoMaker streams every agent action (planning steps, file edits, test results, terminal output) to UI in real time
+- **Current gap**: WebSocket exists (`src/server/websocket/index.ts`), SSE for Claude Code exists, but agent layer (`bac-agent.ts`, `codegen-agent.ts`) doesn't stream intermediate steps
+- **Implementation**: Worker processors (`src/worker/processors/`) should emit granular events: `step_started`, `file_written`, `test_passed`, `deploy_initiated`. Frontend shows live activity feed per project
+
+**6. Context Injection System**
+- AutoMaker uses `.automaker/context/` directories — users drop files (API docs, style guides) that auto-inject into every agent prompt
+- **Current gap**: Agents get context from BAC/AppSpec only. No way for users to provide supplementary context (brand guidelines, API specs, compliance requirements)
+- **Implementation**: Add `context/` directory per project in artifacts system. Files prepended to agent prompts. UI gets "Context" panel for upload/edit
+
+**7. Multi-Provider AI Support**
+- AutoMaker supports Claude, Codex, Copilot, Gemini, Cursor through provider abstraction with per-feature model selection
+- **Current gap**: Have Anthropic Claude + OpenAI fallback but no formal provider interface or per-task model selection
+- **Implementation**: Formalize `src/llm/client.ts` with provider interface. Let BAC agent use different model than codegen agent. Cheap models for simple features, powerful ones for complex architecture
+
+### Tier 3: Our Differentiators (What AutoMaker Can't Do)
+
+**8. Vibe Deploy (Close the Loop)**
+- AutoMaker has ZERO deployment capability. Our entire pipeline solves this
+- When feature is approved on Kanban and merged → automatically trigger deploy pipeline → card moves to "Deployed" with live URL
+
+**9. Multi-Tenant Preview Environments**
+- We already have per-project Docker preview with deterministic port ranges. Extend so every feature branch gets its own preview URL (like Vercel/Netlify preview deployments)
+
+**10. Infrastructure as Features**
+- Kanban cards aren't just application features — they can be infrastructure: "Add Redis caching," "Set up PostgreSQL," "Configure Stripe webhooks." Agent provisions infrastructure via deployer, not just application code
+
+### What NOT to Borrow
+- **Electron desktop app** — we're a web platform, not a local IDE
+- **File-based JSON storage** — we have SQLite/Postgres, keep proper DB
+- **25+ themes** — vanity feature, don't prioritize
+- **Terminal multiplexer (xterm.js)** — our users shouldn't need a terminal, the whole point is abstracting that away. Keep Docker preview instead
+
+### Target Architecture (Combined)
+
+```
+Describe features on Kanban board
+    ↓
+Agent generates BAC/spec → user approves plan
+    ↓
+Agents work in parallel, in isolated git worktrees
+    ↓
+Real-time progress streaming via WebSocket
+    ↓
+Diff review + preview environment
+    ↓
+One-click deploy → live production URL
+    ↓
+Describe next feature, repeat
+```
+
+### Key AutoMaker Technical Patterns Worth Studying
+- **Monorepo with `@automaker/*` packages**: types → utils → platform → server/ui (strict dependency hierarchy, prevents circular deps)
+- **Provider factory pattern**: `base-provider.ts` → `claude-provider.ts` / `codex-provider.ts` etc. (formalized abstraction for multi-model)
+- **Atomic file writes**: temp file → rename (prevents corruption during crashes)
+- **Dual WebSocket servers**: events broadcast (`/api/events`) separate from terminal I/O (`/api/terminal/ws`)
+- **Settings migration system**: handles version transitions (field mapping, model ID canonicalization, format conversions)

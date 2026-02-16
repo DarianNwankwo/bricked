@@ -121,3 +121,48 @@ export function validateBrickAppContract(contract: BrickAppContract): BACValidat
 
   return { valid: errors.length === 0, errors };
 }
+
+export interface ContractCompletenessResult {
+  complete: boolean;
+  incompleteNodes: Array<{ nodeId: string; nodeName: string; fields: string[] }>;
+  incompleteEdges: Array<{ edgeId: string; fields: string[] }>;
+}
+
+/**
+ * Check whether all node and edge contracts are fully specified
+ * (no 'TBD' or empty values). This must pass before code generation.
+ */
+export function validateContractCompleteness(contract: BrickAppContract): ContractCompletenessResult {
+  const incompleteNodes: ContractCompletenessResult['incompleteNodes'] = [];
+  const incompleteEdges: ContractCompletenessResult['incompleteEdges'] = [];
+
+  for (const node of contract.systemContracts?.nodes || []) {
+    const fields: string[] = [];
+    if (isTBDOrEmpty(node.inputContract)) fields.push('inputContract');
+    if (isTBDOrEmpty(node.outputContract)) fields.push('outputContract');
+    if (fields.length > 0) {
+      incompleteNodes.push({ nodeId: node.nodeId, nodeName: node.nodeName, fields });
+    }
+  }
+
+  for (const edge of contract.systemContracts?.edges || []) {
+    const fields: string[] = [];
+    if (isTBDOrEmpty(edge.sourceOutputContract)) fields.push('sourceOutputContract');
+    if (isTBDOrEmpty(edge.targetInputContract)) fields.push('targetInputContract');
+    if (fields.length > 0) {
+      incompleteEdges.push({ edgeId: edge.id, fields });
+    }
+  }
+
+  return {
+    complete: incompleteNodes.length === 0 && incompleteEdges.length === 0,
+    incompleteNodes,
+    incompleteEdges,
+  };
+}
+
+function isTBDOrEmpty(value: string | undefined | null): boolean {
+  if (!value) return true;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed === '' || trimmed === 'tbd';
+}

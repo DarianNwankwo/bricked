@@ -7,6 +7,7 @@
  */
 
 import type { GeneratedFile } from '../codegen/index.js';
+import type { BrickAppContract } from '../types/bac.js';
 
 export interface AgentContext {
   project: {
@@ -31,6 +32,8 @@ export interface AgentContext {
   files: GeneratedFile[];
   conversationHistory: ChatMessage[];
   userPreferences: Record<string, unknown>;
+  bac?: BrickAppContract;
+  systemContext?: string;
 }
 
 export interface ChatMessage {
@@ -44,7 +47,24 @@ export type AgentActionType =
   | 'delete_file'
   | 'run_command'
   | 'deploy'
-  | 'preview';
+  | 'preview'
+  | 'verify';
+
+export interface VerificationCheck {
+  name: string;
+  url: string;
+  passed: boolean;
+  httpStatus?: number;
+  consoleErrors?: string[];
+  screenshotPath?: string;
+  error?: string;
+}
+
+export interface VerificationResult {
+  passed: boolean;
+  checks: VerificationCheck[];
+  timestamp: string;
+}
 
 export interface AgentAction {
   type: AgentActionType;
@@ -59,8 +79,12 @@ export interface AgentResult {
 
 export type AgentMode = 'build_within' | 'augment';
 
+export type AgentDomain = 'bac' | 'codegen' | 'docs';
+
 export interface Agent {
   name: string;
   mode: AgentMode;
+  domain?: AgentDomain;
   execute(context: AgentContext, instruction: string): Promise<AgentResult>;
+  canHandle?(instruction: string): boolean;
 }

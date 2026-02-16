@@ -1,0 +1,79 @@
+name: brick-studio
+region: nyc
+
+services:
+  - name: web
+    dockerfile_path: Dockerfile.web
+    http_port: 3333
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    autoscaling:
+      min_instance_count: 1
+      max_instance_count: 3
+      metrics:
+        cpu:
+          percent: 75
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 10
+      period_seconds: 30
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3333"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: REDIS_URL
+        scope: RUN_TIME
+        value: ${redis.REDIS_URL}
+      - key: JWT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: OPENROUTER_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: DO_API_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+
+workers:
+  - name: agent-worker
+    dockerfile_path: Dockerfile.worker
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    autoscaling:
+      min_instance_count: 1
+      max_instance_count: 5
+      metrics:
+        cpu:
+          percent: 70
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: REDIS_URL
+        scope: RUN_TIME
+        value: ${redis.REDIS_URL}
+      - key: OPENROUTER_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: DO_API_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+
+databases:
+  - engine: PG
+    name: db
+    size: db-s-1vcpu-1gb
+    version: "16"
+  - engine: REDIS
+    name: redis
+    size: db-s-1vcpu-1gb
+    version: "7"

@@ -10,6 +10,7 @@ import type {
   BACIntegration,
   BACNodeContract,
   BACWorkflow,
+  BACPatch,
   BrickAppContract,
 } from '../types/bac.js';
 
@@ -345,4 +346,135 @@ export function deriveBrickAppContract(params: DeriveBACParams): BrickAppContrac
     aiOpportunityAssessment,
     aiFlows,
   };
+}
+
+/**
+ * Project a BAC back to architecture components and connections.
+ * This is the reverse of deriveBrickAppContract — used to sync graph
+ * when BAC is edited directly.
+ */
+export function bacToArchitecture(bac: BrickAppContract): {
+  components: Array<{
+    id: string;
+    name: string;
+    type: string;
+    x?: number;
+    y?: number;
+    spec: {
+      description?: string;
+      inputs?: string;
+      outputs?: string;
+      notes?: string;
+    };
+    connections: string[];
+  }>;
+  connections: Array<{
+    from: string;
+    to: string;
+    label?: string;
+    contract?: {
+      sourceOutput?: string;
+      targetInput?: string;
+      notes?: string;
+    };
+  }>;
+} {
+  const nodes = bac.systemContracts?.nodes || [];
+  const edges = bac.systemContracts?.edges || [];
+
+  // Build adjacency from edges
+  const adjacency = new Map<string, string[]>();
+  for (const edge of edges) {
+    const list = adjacency.get(edge.fromNodeId) || [];
+    list.push(edge.toNodeId);
+    adjacency.set(edge.fromNodeId, list);
+  }
+
+  const components = nodes.map(node => ({
+    id: node.nodeId,
+    name: node.nodeName,
+    type: node.nodeType,
+    x: node.x,
+    y: node.y,
+    spec: {
+      description: node.description,
+      inputs: node.inputContract !== 'TBD' ? node.inputContract : undefined,
+      outputs: node.outputContract !== 'TBD' ? node.outputContract : undefined,
+      notes: node.notes,
+    },
+    connections: adjacency.get(node.nodeId) || [],
+  }));
+
+  const connections = edges.map(edge => ({
+    from: edge.fromNodeId,
+    to: edge.toNodeId,
+    label: edge.label,
+    contract: {
+      sourceOutput: edge.sourceOutputContract !== 'TBD' ? edge.sourceOutputContract : undefined,
+      targetInput: edge.targetInputContract !== 'TBD' ? edge.targetInputContract : undefined,
+      notes: edge.notes,
+    },
+  }));
+
+  return { components, connections };
+}
+
+/**
+ * Apply a structured patch to a BAC, returning a new BAC.
+ * Immutable — never mutates the input.
+ */
+export function applyBACPatch(bac: BrickAppContract, patch: BACPatch): BrickAppContract {
+  const result: BrickAppContract = JSON.parse(JSON.stringify(bac));
+  result.metadata.updatedAt = new Date().toISOString();
+
+  switch (patch.op) {
+    case 'update_node_contract': {
+      const node = result.systemContracts.nodes.find(n => n.nodeId === patch.nodeId);
+      if (node) {
+        Object.assign(node, patch.fields);
+      }
+      break;
+    }
+    case 'update_edge_contract': {
+      const edge = result.systemContracts.edges.find(e => e.id === patch.edgeId);
+      if (edge) {
+        Object.assign(edge, patch.fields);
+      }
+      break;
+    }
+    case 'update_metadata': {
+      Object.assign(result.metadata, patch.fields);
+      break;
+    }
+    case 'update_product_outcome': {
+      Object.assign(result.productOutcome, patch.fields);
+      break;
+    }
+    case 'add_node': {
+      result.systemContracts.nodes.push(patch.node);
+      break;
+    }
+    case 'remove_node': {
+      result.systemContracts.nodes = result.systemContracts.nodes.filter(
+        n => n.nodeId !== patch.nodeId
+      );
+      // Also remove edges referencing this node
+      result.systemContracts.edges = result.systemContracts.edges.filter(
+        e => e.fromNodeId !== patch.nodeId && e.toNodeId !== patch.nodeId
+      );
+      break;
+    }
+    case 'add_edge': {
+      result.systemContracts.edges.push(patch.edge);
+      break;
+    }
+    case 'remove_edge': {
+      result.systemContracts.edges = result.systemContracts.edges.filter(
+        e => e.id !== patch.edgeId
+      );
+      break;
+    }
+  }
+
+  return result;
 }

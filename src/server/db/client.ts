@@ -18,6 +18,7 @@ import type {
   ContactInteraction,
 } from './schema.js';
 import { SQLiteClient } from './sqlite-client.js';
+import { PostgresClient } from './postgres-client.js';
 
 // In-memory database implementation
 class InMemoryDB implements DatabaseClient {
@@ -564,8 +565,10 @@ let dbInstance: DatabaseClient | null = null;
 
 export function getDatabase(): DatabaseClient {
   if (!dbInstance) {
-    const usesSQLite = process.env.BRICK_DB === 'sqlite' || process.env.BRICK_DB_PATH;
-    if (usesSQLite) {
+    if (process.env.DATABASE_URL) {
+      console.log('  Using PostgreSQL database');
+      dbInstance = new PostgresClient();
+    } else if (process.env.BRICK_DB === 'sqlite' || process.env.BRICK_DB_PATH) {
       console.log('  Using SQLite database');
       dbInstance = new SQLiteClient();
     } else {

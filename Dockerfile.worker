@@ -1,0 +1,30 @@
+# Brick Studio — Agent Worker
+# Multi-stage build for production deployment
+
+# ── Stage 1: Build ───────────────────────────────────────────────────────────
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev
+
+COPY tsconfig.json ./
+COPY src/ src/
+
+RUN npx tsc
+
+# ── Stage 2: Production ─────────────────────────────────────────────────────
+FROM node:20-slim
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY --from=builder /app/dist/ dist/
+COPY src/server/db/migrations/ dist/src/server/db/migrations/
+
+ENV NODE_ENV=production
+
+CMD ["node", "dist/src/worker/index.js"]

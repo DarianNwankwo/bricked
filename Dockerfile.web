@@ -1,0 +1,53 @@
+# Brick Studio — Web Server
+# Multi-stage build for production deployment
+
+# ── Stage 1: Build Backend ──────────────────────────────────────────────────
+FROM node:20-slim AS backend-builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev
+
+COPY tsconfig.json ./
+COPY src/ src/
+
+RUN npx tsc
+
+# ── Stage 2: Build Frontend ─────────────────────────────────────────────────
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /app/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+
+RUN npm run build
+
+# ── Stage 3: Production ─────────────────────────────────────────────────────
+FROM node:20-slim
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+# Backend build output
+COPY --from=backend-builder /app/dist/ dist/
+
+# Frontend build output (Vite)
+COPY --from=frontend-builder /app/frontend/dist/ dist/frontend/
+
+# Non-TS assets
+COPY src/landing/ src/landing/
+COPY src/server/db/migrations/ dist/src/server/db/migrations/
+COPY data/ data/
+
+ENV NODE_ENV=production
+ENV PORT=3333
+
+EXPOSE 3333
+
+CMD ["node", "dist/src/server/index.js"]
