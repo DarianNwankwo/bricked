@@ -17,6 +17,9 @@ import type {
   ProjectMember,
   ProjectInvite,
   DatabaseClient,
+  Feature,
+  Message,
+  ProjectFile,
   Contact,
   Note,
   ContactInteraction,
@@ -74,6 +77,10 @@ export class SQLiteClient implements DatabaseClient {
         documentation TEXT DEFAULT '',
         architecture TEXT NOT NULL,
         connection_labels TEXT DEFAULT '{}',
+        bac TEXT,
+        diagram TEXT,
+        component_specs TEXT DEFAULT '{}',
+        last_generated_components TEXT DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         archived_at TEXT,
@@ -81,6 +88,12 @@ export class SQLiteClient implements DatabaseClient {
         FOREIGN KEY (user_id) REFERENCES users(id)
       )
     `);
+
+    // Add columns if they don't exist (for existing databases)
+    try { this.db.exec('ALTER TABLE projects ADD COLUMN bac TEXT'); } catch {}
+    try { this.db.exec('ALTER TABLE projects ADD COLUMN diagram TEXT'); } catch {}
+    try { this.db.exec("ALTER TABLE projects ADD COLUMN component_specs TEXT DEFAULT '{}'"); } catch {}
+    try { this.db.exec("ALTER TABLE projects ADD COLUMN last_generated_components TEXT DEFAULT '[]'"); } catch {}
 
     // Environments table
     this.db.exec(`
@@ -158,6 +171,7 @@ export class SQLiteClient implements DatabaseClient {
         custom_icons TEXT DEFAULT '{}',
         github_token TEXT,
         github_username TEXT,
+        preferred_model TEXT,
         FOREIGN KEY (user_id) REFERENCES users(id)
       )
     `);
@@ -203,6 +217,68 @@ export class SQLiteClient implements DatabaseClient {
       CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage_records(created_at);
       CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members(user_id);
       CREATE INDEX IF NOT EXISTS idx_project_invites_token ON project_invites(token);
+    `);
+
+    // =========================================================================
+    // Features, Messages, and Project Files Tables
+    // =========================================================================
+
+    // Features table for the Kanban board
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS features (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'backlog',
+        agent_status TEXT,
+        agent_message TEXT,
+        position INTEGER DEFAULT 0,
+        timer_end TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Messages table for chat history persistence
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        context_mode TEXT DEFAULT 'architecture',
+        metadata TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Project files table for generated code persistence
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS project_files (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        component_id TEXT,
+        is_manually_edited INTEGER DEFAULT 0,
+        generated_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        UNIQUE(project_id, path)
+      )
+    `);
+
+    // Features/Messages/Files indexes
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_features_project ON features(project_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+      CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id);
     `);
 
     // =========================================================================
@@ -406,6 +482,11 @@ export class SQLiteClient implements DatabaseClient {
   }
 
   private rowToProject(row: Record<string, unknown>): Project {
+    const parseJson = (val: unknown) => {
+      if (val == null) return null;
+      if (typeof val === 'string') { try { return JSON.parse(val); } catch { return null; } }
+      return val;
+    };
     return {
       id: row.id as string,
       userId: row.user_id as string,
@@ -414,6 +495,10 @@ export class SQLiteClient implements DatabaseClient {
       documentation: row.documentation as string,
       architecture: JSON.parse(row.architecture as string),
       connectionLabels: JSON.parse((row.connection_labels as string) || '{}'),
+      bac: parseJson(row.bac) as Project['bac'],
+      componentSpecs: (parseJson(row.component_specs) as Project['componentSpecs']) || {},
+      diagram: (row.diagram as string) || null,
+      lastGeneratedComponents: (parseJson(row.last_generated_components) as Project['lastGeneratedComponents']) || [],
       createdAt: new Date(row.created_at as string),
       updatedAt: new Date(row.updated_at as string),
       archivedAt: row.archived_at ? new Date(row.archived_at as string) : undefined,
@@ -455,6 +540,22 @@ export class SQLiteClient implements DatabaseClient {
     if (updates.connectionLabels !== undefined) {
       fields.push('connection_labels = ?');
       values.push(JSON.stringify(updates.connectionLabels));
+    }
+    if (updates.bac !== undefined) {
+      fields.push('bac = ?');
+      values.push(updates.bac ? JSON.stringify(updates.bac) : null);
+    }
+    if (updates.componentSpecs !== undefined) {
+      fields.push('component_specs = ?');
+      values.push(JSON.stringify(updates.componentSpecs));
+    }
+    if (updates.diagram !== undefined) {
+      fields.push('diagram = ?');
+      values.push(updates.diagram);
+    }
+    if (updates.lastGeneratedComponents !== undefined) {
+      fields.push('last_generated_components = ?');
+      values.push(JSON.stringify(updates.lastGeneratedComponents));
     }
 
     values.push(id);
@@ -863,6 +964,7 @@ export class SQLiteClient implements DatabaseClient {
       customIcons: JSON.parse((row.custom_icons as string) || '{}'),
       githubToken: row.github_token as string | undefined,
       githubUsername: row.github_username as string | undefined,
+      preferredModel: row.preferred_model as string | undefined,
     };
   }
 
@@ -889,6 +991,10 @@ export class SQLiteClient implements DatabaseClient {
         fields.push('github_username = ?');
         values.push(prefs.githubUsername);
       }
+      if (prefs.preferredModel !== undefined) {
+        fields.push('preferred_model = ?');
+        values.push(prefs.preferredModel);
+      }
 
       if (fields.length > 0) {
         values.push(userId);
@@ -897,15 +1003,16 @@ export class SQLiteClient implements DatabaseClient {
       }
     } else {
       const stmt = this.db.prepare(`
-        INSERT INTO user_preferences (user_id, theme, custom_icons, github_token, github_username)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO user_preferences (user_id, theme, custom_icons, github_token, github_username, preferred_model)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
       stmt.run(
         userId,
         prefs.theme || 'auto',
         JSON.stringify(prefs.customIcons || {}),
         prefs.githubToken || null,
-        prefs.githubUsername || null
+        prefs.githubUsername || null,
+        prefs.preferredModel || null
       );
     }
 
@@ -1074,6 +1181,173 @@ export class SQLiteClient implements DatabaseClient {
   async deleteProjectInvite(id: string): Promise<boolean> {
     const result = this.db.prepare('DELETE FROM project_invites WHERE id = ?').run(id);
     return result.changes > 0;
+  }
+
+  // ==========================================================================
+  // Features
+  // ==========================================================================
+
+  async createFeature(projectId: string, title: string, description: string): Promise<Feature> {
+    const id = this.generateId();
+    const now = new Date();
+    // Get next position
+    const posRow = this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next_pos FROM features WHERE project_id = ?').get(projectId) as Record<string, unknown>;
+    const position = (posRow?.next_pos as number) ?? 0;
+
+    this.db.prepare(`
+      INSERT INTO features (id, project_id, title, description, status, position, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'backlog', ?, ?, ?)
+    `).run(id, projectId, title, description, position, now.toISOString(), now.toISOString());
+
+    return {
+      id, projectId, title, description, status: 'backlog',
+      position, createdAt: now, updatedAt: now,
+    };
+  }
+
+  async getFeaturesByProjectId(projectId: string): Promise<Feature[]> {
+    const rows = this.db.prepare('SELECT * FROM features WHERE project_id = ? ORDER BY position ASC').all(projectId) as Record<string, unknown>[];
+    return rows.map(row => this.rowToFeature(row));
+  }
+
+  async getFeatureById(id: string): Promise<Feature | null> {
+    const row = this.db.prepare('SELECT * FROM features WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.rowToFeature(row);
+  }
+
+  async updateFeature(id: string, updates: Partial<Feature>): Promise<Feature | null> {
+    const fields: string[] = ['updated_at = ?'];
+    const values: unknown[] = [new Date().toISOString()];
+    if (updates.title !== undefined) { fields.push('title = ?'); values.push(updates.title); }
+    if (updates.description !== undefined) { fields.push('description = ?'); values.push(updates.description); }
+    if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
+    if (updates.agentStatus !== undefined) { fields.push('agent_status = ?'); values.push(updates.agentStatus); }
+    if (updates.agentMessage !== undefined) { fields.push('agent_message = ?'); values.push(updates.agentMessage); }
+    if (updates.position !== undefined) { fields.push('position = ?'); values.push(updates.position); }
+    if (updates.timerEnd !== undefined) { fields.push('timer_end = ?'); values.push(updates.timerEnd ? updates.timerEnd.toISOString() : null); }
+    values.push(id);
+    this.db.prepare(`UPDATE features SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    return this.getFeatureById(id);
+  }
+
+  async deleteFeature(id: string): Promise<boolean> {
+    return this.db.prepare('DELETE FROM features WHERE id = ?').run(id).changes > 0;
+  }
+
+  private rowToFeature(row: Record<string, unknown>): Feature {
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      title: row.title as string,
+      description: (row.description as string) || '',
+      status: row.status as Feature['status'],
+      agentStatus: row.agent_status as Feature['agentStatus'],
+      agentMessage: row.agent_message as string | undefined,
+      position: row.position as number,
+      timerEnd: row.timer_end ? new Date(row.timer_end as string) : null,
+      createdAt: new Date(row.created_at as string),
+      updatedAt: new Date(row.updated_at as string),
+    };
+  }
+
+  // ==========================================================================
+  // Messages
+  // ==========================================================================
+
+  async createMessage(data: Omit<Message, 'id' | 'createdAt'>): Promise<Message> {
+    const id = this.generateId();
+    const now = new Date();
+    this.db.prepare(`
+      INSERT INTO messages (id, project_id, user_id, role, content, context_mode, metadata, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, data.projectId, data.userId, data.role, data.content, data.contextMode, JSON.stringify(data.metadata), now.toISOString());
+    return { id, ...data, createdAt: now };
+  }
+
+  async getMessagesByProjectId(projectId: string, limit?: number): Promise<Message[]> {
+    let query: string;
+    const params: unknown[] = [projectId];
+    if (limit) {
+      query = `SELECT * FROM (SELECT * FROM messages WHERE project_id = ? ORDER BY created_at DESC LIMIT ?) sub ORDER BY created_at ASC`;
+      params.push(limit);
+    } else {
+      query = 'SELECT * FROM messages WHERE project_id = ? ORDER BY created_at ASC';
+    }
+    const rows = this.db.prepare(query).all(...params) as Record<string, unknown>[];
+    return rows.map(row => this.rowToMessage(row));
+  }
+
+  async deleteMessagesByProjectId(projectId: string): Promise<boolean> {
+    return this.db.prepare('DELETE FROM messages WHERE project_id = ?').run(projectId).changes > 0;
+  }
+
+  private rowToMessage(row: Record<string, unknown>): Message {
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      userId: row.user_id as string,
+      role: row.role as Message['role'],
+      content: row.content as string,
+      contextMode: (row.context_mode as Message['contextMode']) || 'architecture',
+      metadata: JSON.parse((row.metadata as string) || '{}'),
+      createdAt: new Date(row.created_at as string),
+    };
+  }
+
+  // ==========================================================================
+  // Project Files
+  // ==========================================================================
+
+  async upsertProjectFile(projectId: string, path: string, content: string, componentId?: string): Promise<ProjectFile> {
+    const id = this.generateId();
+    const now = new Date();
+    this.db.prepare(`
+      INSERT INTO project_files (id, project_id, path, content, component_id, is_manually_edited, generated_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT (project_id, path) DO UPDATE SET
+        content = excluded.content,
+        component_id = COALESCE(excluded.component_id, project_files.component_id),
+        updated_at = excluded.updated_at
+    `).run(id, projectId, path, content, componentId || null, now.toISOString(), now.toISOString());
+
+    return (await this.getProjectFile(projectId, path))!;
+  }
+
+  async getProjectFilesByProjectId(projectId: string): Promise<ProjectFile[]> {
+    const rows = this.db.prepare('SELECT * FROM project_files WHERE project_id = ? ORDER BY path ASC').all(projectId) as Record<string, unknown>[];
+    return rows.map(row => this.rowToProjectFile(row));
+  }
+
+  async getProjectFile(projectId: string, path: string): Promise<ProjectFile | null> {
+    const row = this.db.prepare('SELECT * FROM project_files WHERE project_id = ? AND path = ?').get(projectId, path) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.rowToProjectFile(row);
+  }
+
+  async updateProjectFile(projectId: string, path: string, content: string): Promise<ProjectFile | null> {
+    const result = this.db.prepare(
+      `UPDATE project_files SET content = ?, is_manually_edited = 1, updated_at = ? WHERE project_id = ? AND path = ?`
+    ).run(content, new Date().toISOString(), projectId, path);
+    if (result.changes === 0) return null;
+    return this.getProjectFile(projectId, path);
+  }
+
+  async deleteProjectFilesByProjectId(projectId: string): Promise<boolean> {
+    return this.db.prepare('DELETE FROM project_files WHERE project_id = ?').run(projectId).changes > 0;
+  }
+
+  private rowToProjectFile(row: Record<string, unknown>): ProjectFile {
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      path: row.path as string,
+      content: (row.content as string) || '',
+      componentId: row.component_id as string | undefined,
+      isManuallyEdited: Boolean(row.is_manually_edited),
+      generatedAt: new Date(row.generated_at as string),
+      updatedAt: new Date(row.updated_at as string),
+    };
   }
 
   // ==========================================================================

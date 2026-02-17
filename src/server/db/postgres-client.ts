@@ -7,7 +7,8 @@ import crypto from 'crypto';
 import type {
   User, Project, Environment, Deployment, UsageRecord,
   AIUsageRecord, UserPreferences, ProjectMember, ProjectInvite,
-  DatabaseClient, Contact, Note, ContactInteraction,
+  DatabaseClient, Feature, Message, ProjectFile,
+  Contact, Note, ContactInteraction,
 } from './schema.js';
 
 // pg is a peer dependency — only imported when DATABASE_URL is set
@@ -36,24 +37,27 @@ export class PostgresClient implements DatabaseClient {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = dirname(__filename);
 
-    const migrationPaths = [
-      join(__dirname, 'migrations', '001-initial.sql'),
-      join(process.cwd(), 'src', 'server', 'db', 'migrations', '001-initial.sql'),
-    ];
-    let migrationRan = false;
-    for (const mp of migrationPaths) {
-      let sql: string;
-      try {
-        sql = readFileSync(mp, 'utf-8');
-      } catch {
-        continue; // file not found, try next path
+    const migrationFiles = ['001-initial.sql', '002-features-and-files.sql'];
+    for (const migrationFile of migrationFiles) {
+      const migrationPaths = [
+        join(__dirname, 'migrations', migrationFile),
+        join(process.cwd(), 'src', 'server', 'db', 'migrations', migrationFile),
+      ];
+      let migrationRan = false;
+      for (const mp of migrationPaths) {
+        let sql: string;
+        try {
+          sql = readFileSync(mp, 'utf-8');
+        } catch {
+          continue; // file not found, try next path
+        }
+        await this.pool.query(sql);
+        migrationRan = true;
+        break;
       }
-      await this.pool.query(sql);
-      migrationRan = true;
-      break;
-    }
-    if (!migrationRan) {
-      console.warn('Warning: No migration file found at any of:', migrationPaths);
+      if (!migrationRan) {
+        console.warn(`Warning: No migration file found for ${migrationFile}`);
+      }
     }
 
     this.initialized = true;
@@ -148,6 +152,10 @@ export class PostgresClient implements DatabaseClient {
     if (updates.documentation !== undefined) { sets.push(`documentation = $${idx++}`); vals.push(updates.documentation); }
     if (updates.architecture !== undefined) { sets.push(`architecture = $${idx++}`); vals.push(JSON.stringify(updates.architecture)); }
     if (updates.connectionLabels !== undefined) { sets.push(`connection_labels = $${idx++}`); vals.push(JSON.stringify(updates.connectionLabels)); }
+    if (updates.bac !== undefined) { sets.push(`bac = $${idx++}`); vals.push(updates.bac ? JSON.stringify(updates.bac) : null); }
+    if (updates.componentSpecs !== undefined) { sets.push(`component_specs = $${idx++}`); vals.push(JSON.stringify(updates.componentSpecs)); }
+    if (updates.diagram !== undefined) { sets.push(`diagram = $${idx++}`); vals.push(updates.diagram); }
+    if (updates.lastGeneratedComponents !== undefined) { sets.push(`last_generated_components = $${idx++}`); vals.push(JSON.stringify(updates.lastGeneratedComponents)); }
     vals.push(id);
     const { rows } = await this.pool.query(`UPDATE projects SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, vals);
     return rows[0] ? this.mapProject(rows[0]) : null;
@@ -363,15 +371,16 @@ export class PostgresClient implements DatabaseClient {
   async upsertUserPreferences(userId: string, prefs: Partial<UserPreferences>): Promise<UserPreferences> {
     await this.init();
     const { rows } = await this.pool.query(
-      `INSERT INTO user_preferences (user_id, theme, custom_icons, github_token, github_username)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO user_preferences (user_id, theme, custom_icons, github_token, github_username, preferred_model)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (user_id) DO UPDATE SET
          theme = COALESCE($2, user_preferences.theme),
          custom_icons = COALESCE($3, user_preferences.custom_icons),
          github_token = COALESCE($4, user_preferences.github_token),
-         github_username = COALESCE($5, user_preferences.github_username)
+         github_username = COALESCE($5, user_preferences.github_username),
+         preferred_model = COALESCE($6, user_preferences.preferred_model)
        RETURNING *`,
-      [userId, prefs.theme || 'auto', JSON.stringify(prefs.customIcons || {}), prefs.githubToken || null, prefs.githubUsername || null]
+      [userId, prefs.theme || 'auto', JSON.stringify(prefs.customIcons || {}), prefs.githubToken || null, prefs.githubUsername || null, prefs.preferredModel !== undefined ? prefs.preferredModel : null]
     );
     return this.mapPreferences(rows[0]);
   }
@@ -476,6 +485,146 @@ export class PostgresClient implements DatabaseClient {
   async deleteProjectInvite(id: string): Promise<boolean> {
     await this.init();
     const { rowCount } = await this.pool.query('DELETE FROM project_invites WHERE id = $1', [id]);
+    return (rowCount ?? 0) > 0;
+  }
+
+  // === Features ===
+
+  async createFeature(projectId: string, title: string, description: string): Promise<Feature> {
+    await this.init();
+    const id = this.generateId();
+    // Get next position
+    const { rows: posRows } = await this.pool.query(
+      'SELECT COALESCE(MAX(position), -1) + 1 AS next_pos FROM features WHERE project_id = $1',
+      [projectId]
+    );
+    const position = posRows[0]?.next_pos ?? 0;
+    const { rows } = await this.pool.query(
+      `INSERT INTO features (id, project_id, title, description, position) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [id, projectId, title, description, position]
+    );
+    return this.mapFeatureRow(rows[0]);
+  }
+
+  async getFeaturesByProjectId(projectId: string): Promise<Feature[]> {
+    await this.init();
+    const { rows } = await this.pool.query(
+      'SELECT * FROM features WHERE project_id = $1 ORDER BY position ASC',
+      [projectId]
+    );
+    return rows.map(r => this.mapFeatureRow(r));
+  }
+
+  async getFeatureById(id: string): Promise<Feature | null> {
+    await this.init();
+    const { rows } = await this.pool.query('SELECT * FROM features WHERE id = $1', [id]);
+    return rows[0] ? this.mapFeatureRow(rows[0]) : null;
+  }
+
+  async updateFeature(id: string, updates: Partial<Feature>): Promise<Feature | null> {
+    await this.init();
+    const sets: string[] = ['updated_at = NOW()'];
+    const vals: unknown[] = [];
+    let idx = 1;
+    if (updates.title !== undefined) { sets.push(`title = $${idx++}`); vals.push(updates.title); }
+    if (updates.description !== undefined) { sets.push(`description = $${idx++}`); vals.push(updates.description); }
+    if (updates.status !== undefined) { sets.push(`status = $${idx++}`); vals.push(updates.status); }
+    if (updates.agentStatus !== undefined) { sets.push(`agent_status = $${idx++}`); vals.push(updates.agentStatus); }
+    if (updates.agentMessage !== undefined) { sets.push(`agent_message = $${idx++}`); vals.push(updates.agentMessage); }
+    if (updates.position !== undefined) { sets.push(`position = $${idx++}`); vals.push(updates.position); }
+    if (updates.timerEnd !== undefined) { sets.push(`timer_end = $${idx++}`); vals.push(updates.timerEnd); }
+    vals.push(id);
+    const { rows } = await this.pool.query(`UPDATE features SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, vals);
+    return rows[0] ? this.mapFeatureRow(rows[0]) : null;
+  }
+
+  async deleteFeature(id: string): Promise<boolean> {
+    await this.init();
+    const { rowCount } = await this.pool.query('DELETE FROM features WHERE id = $1', [id]);
+    return (rowCount ?? 0) > 0;
+  }
+
+  // === Messages ===
+
+  async createMessage(data: Omit<Message, 'id' | 'createdAt'>): Promise<Message> {
+    await this.init();
+    const id = this.generateId();
+    const { rows } = await this.pool.query(
+      `INSERT INTO messages (id, project_id, user_id, role, content, context_mode, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [id, data.projectId, data.userId, data.role, data.content, data.contextMode, JSON.stringify(data.metadata)]
+    );
+    return this.mapMessageRow(rows[0]);
+  }
+
+  async getMessagesByProjectId(projectId: string, limit?: number): Promise<Message[]> {
+    await this.init();
+    let q = 'SELECT * FROM messages WHERE project_id = $1 ORDER BY created_at ASC';
+    const vals: unknown[] = [projectId];
+    if (limit) {
+      // Get the last N messages (subquery to maintain ASC order)
+      q = `SELECT * FROM (SELECT * FROM messages WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2) sub ORDER BY created_at ASC`;
+      vals.push(limit);
+    }
+    const { rows } = await this.pool.query(q, vals);
+    return rows.map(r => this.mapMessageRow(r));
+  }
+
+  async deleteMessagesByProjectId(projectId: string): Promise<boolean> {
+    await this.init();
+    const { rowCount } = await this.pool.query('DELETE FROM messages WHERE project_id = $1', [projectId]);
+    return (rowCount ?? 0) > 0;
+  }
+
+  // === Project Files ===
+
+  async upsertProjectFile(projectId: string, path: string, content: string, componentId?: string): Promise<ProjectFile> {
+    await this.init();
+    const id = this.generateId();
+    const { rows } = await this.pool.query(
+      `INSERT INTO project_files (id, project_id, path, content, component_id)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (project_id, path) DO UPDATE SET
+         content = $4,
+         component_id = COALESCE($5, project_files.component_id),
+         updated_at = NOW()
+       RETURNING *`,
+      [id, projectId, path, content, componentId || null]
+    );
+    return this.mapProjectFileRow(rows[0]);
+  }
+
+  async getProjectFilesByProjectId(projectId: string): Promise<ProjectFile[]> {
+    await this.init();
+    const { rows } = await this.pool.query(
+      'SELECT * FROM project_files WHERE project_id = $1 ORDER BY path ASC',
+      [projectId]
+    );
+    return rows.map(r => this.mapProjectFileRow(r));
+  }
+
+  async getProjectFile(projectId: string, path: string): Promise<ProjectFile | null> {
+    await this.init();
+    const { rows } = await this.pool.query(
+      'SELECT * FROM project_files WHERE project_id = $1 AND path = $2',
+      [projectId, path]
+    );
+    return rows[0] ? this.mapProjectFileRow(rows[0]) : null;
+  }
+
+  async updateProjectFile(projectId: string, path: string, content: string): Promise<ProjectFile | null> {
+    await this.init();
+    const { rows } = await this.pool.query(
+      `UPDATE project_files SET content = $3, is_manually_edited = TRUE, updated_at = NOW()
+       WHERE project_id = $1 AND path = $2 RETURNING *`,
+      [projectId, path, content]
+    );
+    return rows[0] ? this.mapProjectFileRow(rows[0]) : null;
+  }
+
+  async deleteProjectFilesByProjectId(projectId: string): Promise<boolean> {
+    await this.init();
+    const { rowCount } = await this.pool.query('DELETE FROM project_files WHERE project_id = $1', [projectId]);
     return (rowCount ?? 0) > 0;
   }
 
@@ -637,6 +786,11 @@ export class PostgresClient implements DatabaseClient {
   }
 
   private mapProject(row: Record<string, unknown>): Project {
+    const parseJson = (val: unknown) => {
+      if (val == null) return null;
+      if (typeof val === 'string') { try { return JSON.parse(val); } catch { return null; } }
+      return val;
+    };
     return {
       id: row.id as string,
       userId: row.user_id as string,
@@ -645,6 +799,10 @@ export class PostgresClient implements DatabaseClient {
       documentation: (row.documentation as string) || '',
       architecture: typeof row.architecture === 'string' ? JSON.parse(row.architecture) : row.architecture as Project['architecture'],
       connectionLabels: typeof row.connection_labels === 'string' ? JSON.parse(row.connection_labels) : (row.connection_labels as Record<string, string>) || {},
+      bac: parseJson(row.bac) as Project['bac'],
+      componentSpecs: (parseJson(row.component_specs) as Project['componentSpecs']) || {},
+      diagram: (row.diagram as string) || null,
+      lastGeneratedComponents: (parseJson(row.last_generated_components) as Project['lastGeneratedComponents']) || [],
       createdAt: new Date(row.created_at as string),
       updatedAt: new Date(row.updated_at as string),
       archivedAt: row.archived_at ? new Date(row.archived_at as string) : undefined,
@@ -717,6 +875,7 @@ export class PostgresClient implements DatabaseClient {
       customIcons: (typeof row.custom_icons === 'string' ? JSON.parse(row.custom_icons) : row.custom_icons) as Record<string, string>,
       githubToken: row.github_token as string | undefined,
       githubUsername: row.github_username as string | undefined,
+      preferredModel: row.preferred_model as string | undefined,
     };
   }
 
@@ -743,6 +902,48 @@ export class PostgresClient implements DatabaseClient {
       createdAt: new Date(row.created_at as string),
       expiresAt: new Date(row.expires_at as string),
       acceptedAt: row.accepted_at ? new Date(row.accepted_at as string) : undefined,
+    };
+  }
+
+  private mapFeatureRow(row: Record<string, unknown>): Feature {
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      title: row.title as string,
+      description: (row.description as string) || '',
+      status: row.status as Feature['status'],
+      agentStatus: row.agent_status as Feature['agentStatus'],
+      agentMessage: row.agent_message as string | undefined,
+      position: Number(row.position),
+      timerEnd: row.timer_end ? new Date(row.timer_end as string) : null,
+      createdAt: new Date(row.created_at as string),
+      updatedAt: new Date(row.updated_at as string),
+    };
+  }
+
+  private mapMessageRow(row: Record<string, unknown>): Message {
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      userId: row.user_id as string,
+      role: row.role as Message['role'],
+      content: row.content as string,
+      contextMode: (row.context_mode as Message['contextMode']) || 'architecture',
+      metadata: (typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata) as Record<string, unknown>,
+      createdAt: new Date(row.created_at as string),
+    };
+  }
+
+  private mapProjectFileRow(row: Record<string, unknown>): ProjectFile {
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      path: row.path as string,
+      content: (row.content as string) || '',
+      componentId: row.component_id as string | undefined,
+      isManuallyEdited: row.is_manually_edited as boolean,
+      generatedAt: new Date(row.generated_at as string),
+      updatedAt: new Date(row.updated_at as string),
     };
   }
 

@@ -14,8 +14,6 @@ import {
 } from '../../bac/index.js';
 import { parse } from '../../parser/index.js';
 import { transform } from '../../transformer/index.js';
-import { slugify } from '../services/artifacts.js';
-
 // ── Interfaces ──────────────────────────────────────────────────────────
 
 export interface ComponentSpec {
@@ -44,20 +42,6 @@ export interface ProjectFile {
 export interface ProjectData {
   files: Map<string, ProjectFile>;
   componentSpecs: Record<string, ComponentSpec>;
-  lastGeneratedComponents: Component[];
-}
-
-export interface SavedProject {
-  id: string;
-  name: string;
-  slug: string;
-  createdAt: Date;
-  editedAt: Date;
-  architecture: ManualArchitecture | null;
-  componentSpecs: Record<string, ComponentSpec>;
-  bac: BrickAppContract | null;
-  diagram: string | null;
-  documentation: string;
   lastGeneratedComponents: Component[];
 }
 
@@ -358,30 +342,6 @@ export class ProjectSession {
     }
   }
 
-  // ── Project save helper ─────────────────────────────────────────────
-
-  saveCurrentProject(savedProjects: Map<string, SavedProject>, name?: string, documentation?: string): SavedProject {
-    if (!this.currentProjectId) {
-      this.currentProjectId = generateId();
-    }
-    const projectName = name || this.manualArchitecture?.name || 'Untitled Project';
-    const project: SavedProject = {
-      id: this.currentProjectId,
-      name: projectName,
-      slug: savedProjects.get(this.currentProjectId)?.slug || slugify(projectName),
-      createdAt: savedProjects.get(this.currentProjectId)?.createdAt || new Date(),
-      editedAt: new Date(),
-      architecture: this.manualArchitecture,
-      componentSpecs: this.currentProject.componentSpecs,
-      bac: this.currentBAC,
-      diagram: this.currentDiagram,
-      documentation: documentation || this.currentDocs || savedProjects.get(this.currentProjectId)?.documentation || '',
-      lastGeneratedComponents: this.currentProject.lastGeneratedComponents,
-    };
-    savedProjects.set(this.currentProjectId, project);
-    return project;
-  }
-
   // ── Reset ───────────────────────────────────────────────────────────
 
   reset(): void {
@@ -398,26 +358,6 @@ export class ProjectSession {
     this.selectedModel = null;
   }
 
-  // ── Load from saved project ─────────────────────────────────────────
-
-  loadFromSavedProject(project: SavedProject): void {
-    this.currentProjectId = project.id;
-    this.manualArchitecture = project.architecture;
-    this.currentProject.componentSpecs = project.componentSpecs;
-    this.currentProject.lastGeneratedComponents = project.lastGeneratedComponents || [];
-    this.currentBAC = project.bac || null;
-    this.currentDiagram = project.diagram;
-    this.currentDocs = project.documentation || '';
-    this.conversationHistory = [];
-    if (!this.currentBAC) {
-      this.refreshBACFromCurrentArchitecture();
-    }
-    if (this.manualArchitecture?.components.length) {
-      this.nextComponentId = nextComponentIndex(this.manualArchitecture.components);
-    } else {
-      this.nextComponentId = 0;
-    }
-  }
 }
 
 // ── Utility ─────────────────────────────────────────────────────────────

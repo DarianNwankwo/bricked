@@ -4,7 +4,6 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { SessionManager } from '../state/SessionManager.js';
 import type { ChatMessage } from '../../llm/index.js';
 import { chatStream, type Message } from '../../llm/index.js';
 import { SYSTEM_PROMPT } from '../../llm/prompts/system.js';
@@ -16,12 +15,9 @@ import { generate } from '../../generator/index.js';
 import { validate } from '../../validator/index.js';
 import { estimateCost } from '../../deployer/cost-estimator.js';
 import YAML from 'yaml';
+import { resolveSession } from '../state/resolveSession.js';
 
 const router = Router();
-
-function getSessionManager(req: Request): SessionManager {
-  return req.app.locals.sessionManager as SessionManager;
-}
 
 function extractMermaidBlock(content: string): string | null {
   const mermaidMatch = content.match(/```mermaid\n([\s\S]*?)```/);
@@ -48,8 +44,7 @@ router.post('/generate-stream', async (req: Request, res: Response) => {
   });
 
   try {
-    const sm = getSessionManager(req);
-    const session = sm.getActiveSession();
+    const session = resolveSession(req);
     const { message, reset } = req.body;
 
     if (reset) {
@@ -122,8 +117,7 @@ router.post('/generate-stream', async (req: Request, res: Response) => {
 // POST /api/build — build from diagram
 router.post('/build', async (req: Request, res: Response) => {
   try {
-    const sm = getSessionManager(req);
-    const session = sm.getActiveSession();
+    const session = resolveSession(req);
     const { componentSpecs: specs } = req.body || {};
     if (specs && typeof specs === 'object') {
       session.currentProject.componentSpecs = specs;

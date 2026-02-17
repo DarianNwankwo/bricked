@@ -243,6 +243,87 @@
   border-top: 1px solid var(--border-color);
 }
 
+/* Tech stack configuration */
+.techstack-config {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 60px 40px 0;
+  overflow-y: auto;
+}
+
+.techstack-config h2 {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.techstack-config > p {
+  margin-bottom: 32px;
+}
+
+.techstack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 560px;
+  margin-bottom: 24px;
+}
+
+.techstack-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.techstack-row-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-secondary);
+}
+
+.techstack-row-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.techstack-row-type {
+  text-transform: capitalize;
+}
+
+.techstack-row .detail-select {
+  min-width: 180px;
+}
+
+.techstack-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 560px;
+  padding: 16px 0 40px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-color);
+  margin-top: auto;
+}
+
+.techstack-cost {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Editable project name */
 .workspace-name-editable {
   cursor: pointer;
@@ -281,18 +362,4 @@
   height: 100%;
 }
 
-/* Docs panel */
-.docs-panel {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.docs-empty {
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
+/* Docs panel — styles moved to DocsPanel.css */

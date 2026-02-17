@@ -1,24 +1,14 @@
 // Deployment orchestration service
 
 import { db } from '../db/client.js';
-import { digitalOcean } from './digitalocean.js';
+import './digitalocean.js'; // Ensure DO provider is registered
+import { getDefaultProvider } from './provider-registry.js';
 import type { Deployment, Environment, Project } from '../db/schema.js';
-
-// Cost calculation (cents per month)
-const COST_PER_COMPONENT: Record<string, number> = {
-  service: 500,      // $5/month
-  static_site: 0,    // Free
-  database: 700,     // $7/month (dev)
-  worker: 500,       // $5/month
-  job: 50,           // ~$0.50/month
-};
 
 class DeploymentService {
   // Calculate monthly cost for a project
   calculateMonthlyCost(project: Project): number {
-    return project.architecture.components.reduce((total, comp) => {
-      return total + (COST_PER_COMPONENT[comp.type] || 500);
-    }, 0);
+    return getDefaultProvider().estimateMonthlyCost(project);
   }
 
   // Start a new deployment
@@ -63,21 +53,15 @@ class DeploymentService {
     env: Environment
   ): Promise<void> {
     try {
+      const provider = getDefaultProvider();
       await db.appendDeploymentLog(deployment.id, 'Starting deployment...');
       await db.updateDeployment(deployment.id, { status: 'building' });
 
-      // Check if app exists or needs to be created
-      let appResponse;
-      if (env.doAppId) {
-        await db.appendDeploymentLog(deployment.id, 'Updating existing app...');
-        appResponse = await digitalOcean.updateApp(env.doAppId, project, env);
-      } else {
-        await db.appendDeploymentLog(deployment.id, 'Creating new app on DigitalOcean...');
-        appResponse = await digitalOcean.createApp(project, env);
-      }
+      await db.appendDeploymentLog(deployment.id, `Deploying via ${provider.displayName}...`);
+      const result = await provider.deploy(project, env);
 
-      const appId = appResponse.app.id;
-      const url = appResponse.app.live_url || appResponse.app.default_ingress;
+      const appId = result.appId;
+      const url = result.url || '';
 
       await db.appendDeploymentLog(deployment.id, `App ID: ${appId}`);
       await db.updateDeployment(deployment.id, {
@@ -90,10 +74,8 @@ class DeploymentService {
       const finalStatus = await this.pollDeploymentStatus(appId, deployment.id);
 
       if (finalStatus === 'ACTIVE') {
-        // Calculate cost
         const monthlyCost = this.calculateMonthlyCost(project);
 
-        // Update deployment and environment
         await db.updateDeployment(deployment.id, {
           status: 'live',
           url: url.startsWith('http') ? url : `https://${url}`,
@@ -124,22 +106,22 @@ class DeploymentService {
     }
   }
 
-  // Poll DigitalOcean for deployment status
+  // Poll provider for deployment status
   private async pollDeploymentStatus(
     appId: string,
     deploymentId: string,
     maxAttempts = 60,
     intervalMs = 5000
   ): Promise<string> {
+    const provider = getDefaultProvider();
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        const app = await digitalOcean.getApp(appId);
-        const phase = app.app.active_deployment?.phase;
+        const status = await provider.getStatus(appId);
 
-        await db.appendDeploymentLog(deploymentId, `Status: ${phase || 'unknown'}`);
+        await db.appendDeploymentLog(deploymentId, `Status: ${status.phase}`);
 
-        if (phase === 'ACTIVE') return 'ACTIVE';
-        if (phase === 'ERROR' || phase === 'FAILED') return 'FAILED';
+        if (status.phase === 'ACTIVE') return 'ACTIVE';
+        if (status.phase === 'ERROR' || status.phase === 'FAILED') return 'FAILED';
 
         await new Promise(resolve => setTimeout(resolve, intervalMs));
       } catch (error) {
@@ -175,7 +157,7 @@ class DeploymentService {
       throw new Error('No active deployment');
     }
 
-    await digitalOcean.deleteApp(env.doAppId);
+    await getDefaultProvider().destroy(env.doAppId);
 
     await db.updateEnvironment(env.id, {
       status: 'stopped',

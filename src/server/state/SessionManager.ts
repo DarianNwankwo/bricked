@@ -1,56 +1,55 @@
 /**
- * SessionManager — manages ProjectSession instances by project ID.
+ * SessionManager — manages ProjectSession instances.
  *
- * During migration there is a single "active" session (backward compat with
- * the original single-user, single-project model in ui.ts). In the future
- * each authenticated user + project pair gets its own session.
+ * Sessions are keyed by a composite string (typically "userId:projectId" for
+ * authenticated users, or just "projectId" for unauthenticated fallback).
+ * This ensures multiple users editing the same project get isolated sessions.
  */
 
-import { ProjectSession, type SavedProject } from './ProjectSession.js';
+import { ProjectSession } from './ProjectSession.js';
 
 export class SessionManager {
   private sessions: Map<string, ProjectSession> = new Map();
   private active: ProjectSession = new ProjectSession();
 
-  /** In-memory saved-project store (moves to Postgres in Phase 4). */
-  readonly savedProjects: Map<string, SavedProject> = new Map();
-
   /**
-   * Get or create a session for a given project ID.
-   * Returns the active session if no projectId is provided.
+   * Get or create a session for a given key.
+   * @param sessionKey - Composite key (e.g. "userId:projectId" or "projectId")
+   * @param projectId - The actual project ID to set on new sessions (defaults to sessionKey)
+   * Returns the active session if no key is provided.
    */
-  getSession(projectId?: string): ProjectSession {
-    if (!projectId) return this.active;
-    let session = this.sessions.get(projectId);
+  getSession(sessionKey?: string, projectId?: string): ProjectSession {
+    if (!sessionKey) return this.active;
+    let session = this.sessions.get(sessionKey);
     if (!session) {
       session = new ProjectSession();
-      session.currentProjectId = projectId;
-      this.sessions.set(projectId, session);
+      session.currentProjectId = projectId || sessionKey;
+      this.sessions.set(sessionKey, session);
     }
     return session;
   }
 
   /**
    * Create a fresh session for a project.
+   * @param sessionKey - Composite key (e.g. "userId:projectId" or "projectId")
+   * @param projectId - The actual project ID (defaults to sessionKey)
    */
-  createSession(projectId: string): ProjectSession {
+  createSession(sessionKey: string, projectId?: string): ProjectSession {
     const session = new ProjectSession();
-    session.currentProjectId = projectId;
-    this.sessions.set(projectId, session);
+    session.currentProjectId = projectId || sessionKey;
+    this.sessions.set(sessionKey, session);
     return session;
   }
 
   /**
    * Remove a session (e.g. when a project is deleted).
    */
-  deleteSession(projectId: string): void {
-    this.sessions.delete(projectId);
+  deleteSession(sessionKey: string): void {
+    this.sessions.delete(sessionKey);
   }
 
   /**
    * Get the current active session (backward compat).
-   * During the migration period the active session is the single global session
-   * that ui.ts used before extraction.
    */
   getActiveSession(): ProjectSession {
     return this.active;
@@ -58,10 +57,11 @@ export class SessionManager {
 
   /**
    * Promote a project session to the active session.
-   * Called when a project is loaded.
+   * @param sessionKey - Composite key (e.g. "userId:projectId" or "projectId")
+   * @param projectId - The actual project ID (defaults to sessionKey)
    */
-  setActiveSession(projectId: string): ProjectSession {
-    const session = this.getSession(projectId);
+  setActiveSession(sessionKey: string, projectId?: string): ProjectSession {
+    const session = this.getSession(sessionKey, projectId);
     this.active = session;
     return session;
   }

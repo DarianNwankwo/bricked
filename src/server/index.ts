@@ -17,6 +17,9 @@ import preferencesRoutes from './routes/preferences.js';
 import inviteRoutes from './routes/invites.js';
 import previewRoutes from './routes/preview.js';
 import githubRoutes from './routes/github.js';
+import featureRoutes from './routes/features.js';
+import messageRoutes from './routes/messages.js';
+import projectFileRoutes from './routes/project-files.js';
 
 // New routes extracted from ui.ts
 import agentRoutes from './routes/agent.js';
@@ -26,6 +29,7 @@ import codegenRoutes from './routes/codegen.js';
 import architectureRoutes from './routes/architecture.js';
 import settingsRoutes from './routes/settings.js';
 import queueRoutes from './routes/queue.js';
+import docsRoutes from './routes/docs.js';
 
 import { digitalOcean } from './services/digitalocean.js';
 import { seedDatabase, getDatabase } from './db/client.js';
@@ -68,6 +72,9 @@ export function createApp() {
   app.use('/api/invites', inviteRoutes);
   app.use('/api/preview', previewRoutes);
   app.use('/api/github', githubRoutes);
+  app.use('/api/projects', featureRoutes);
+  app.use('/api/projects', messageRoutes);
+  app.use('/api/projects', projectFileRoutes);
 
   // ── Studio routes (extracted from ui.ts — in-memory session state) ──
   app.use('/api/agent', agentRoutes);
@@ -76,6 +83,7 @@ export function createApp() {
   app.use('/api', codegenRoutes);     // /api/generate-code, /api/files, /api/file, etc.
   app.use('/api', architectureRoutes); // /api/templates, /api/architecture, /api/component, etc.
   app.use('/api', settingsRoutes);    // /api/reset, /api/config, /api/model, /api/settings, etc.
+  app.use('/api', docsRoutes);        // /api/docs, /api/docs/generate
 
   // ── Queue routes (only active when REDIS_URL is set) ──────────────────
   app.use('/api/queue', queueRoutes);
@@ -162,6 +170,7 @@ export async function startServer(options: StartServerOptions = {}) {
 
   // Setup WebSocket for real-time collaboration
   const io = setupWebSocket(httpServer);
+  app.locals.io = io;
 
   httpServer.listen(port, () => {
     const url = `http://localhost:${port}`;

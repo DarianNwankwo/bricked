@@ -164,6 +164,10 @@ router.get('/:id', async (req: AuthenticatedRequest, res) => {
         documentation: project!.documentation,
         architecture: project!.architecture,
         connectionLabels: project!.connectionLabels || {},
+        bac: project!.bac || null,
+        componentSpecs: project!.componentSpecs || {},
+        diagram: project!.diagram || null,
+        lastGeneratedComponents: project!.lastGeneratedComponents || [],
         createdAt: project!.createdAt,
         updatedAt: project!.updatedAt,
         isArchived: !!project!.archivedAt,
@@ -197,13 +201,17 @@ router.patch('/:id', async (req: AuthenticatedRequest, res) => {
       return res.status(404).json({ error: 'Project not found or not authorized' });
     }
 
-    const { name, documentation, architecture, connectionLabels } = req.body;
+    const { name, documentation, architecture, connectionLabels, bac, componentSpecs, diagram, lastGeneratedComponents } = req.body;
     const updates: Record<string, unknown> = {};
 
     if (name) updates.name = name;
     if (documentation !== undefined) updates.documentation = documentation;
     if (architecture) updates.architecture = architecture;
     if (connectionLabels !== undefined) updates.connectionLabels = connectionLabels;
+    if (bac !== undefined) updates.bac = bac;
+    if (componentSpecs !== undefined) updates.componentSpecs = componentSpecs;
+    if (diagram !== undefined) updates.diagram = diagram;
+    if (lastGeneratedComponents !== undefined) updates.lastGeneratedComponents = lastGeneratedComponents;
 
     const updated = await db.updateProject(access.project!.id, updates);
 

@@ -140,6 +140,20 @@
   padding: 6px;
 }
 
+/* Cost badge in toolbar */
+.canvas-cost-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-left: 1px solid var(--border-color);
+  margin-left: 2px;
+  white-space: nowrap;
+  user-select: none;
+}
+
 /* Component palette */
 .component-palette {
   background: var(--bg-card);

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ArchComponent, ArchConnection, ComponentSpec, BACCompleteness } from '../../api/types';
 import { TYPE_COLORS, TYPE_ICONS } from './constants';
+import { TECH_STACK_OPTIONS } from '../../utils/techStack';
 import { useDebouncedCallback } from '../../hooks/useDebounce';
 import './ComponentDetailPanel.css';
 
@@ -45,7 +46,9 @@ export default function ComponentDetailPanel({
   const [inputs, setInputs] = useState(spec.inputs || '');
   const [outputs, setOutputs] = useState(spec.outputs || '');
   const [notes, setNotes] = useState(spec.notes || '');
-  const [innerComponents, setInnerComponents] = useState<InnerComponent[]>([]);
+  const techOptions = TECH_STACK_OPTIONS[component.type];
+  const [technology, setTechnology] = useState(spec.technology || techOptions?.default || '');
+  const [innerComponents, setInnerComponents] = useState<InnerComponent[]>(spec.innerComponents || []);
   const [saved, setSaved] = useState(false);
 
   // Sync when component/spec changes (e.g. selecting a different node)
@@ -55,7 +58,10 @@ export default function ComponentDetailPanel({
     setInputs(spec.inputs || '');
     setOutputs(spec.outputs || '');
     setNotes(spec.notes || '');
-  }, [component.id, component.name, spec]);
+    const opts = TECH_STACK_OPTIONS[component.type];
+    setTechnology(spec.technology || opts?.default || '');
+    setInnerComponents(spec.innerComponents || []);
+  }, [component.id, component.name, component.type, spec]);
 
   const showSaved = useCallback(() => {
     setSaved(true);
@@ -63,8 +69,8 @@ export default function ComponentDetailPanel({
   }, []);
 
   const debouncedUpdateSpec = useDebouncedCallback(
-    (desc: string, inp: string, out: string, n: string) => {
-      onUpdateSpec(component.id, { description: desc, inputs: inp, outputs: out, notes: n });
+    (desc: string, inp: string, out: string, n: string, tech: string, inner?: InnerComponent[]) => {
+      onUpdateSpec(component.id, { description: desc, inputs: inp, outputs: out, notes: n, technology: tech || undefined, innerComponents: inner });
       showSaved();
     },
     800
@@ -80,19 +86,23 @@ export default function ComponentDetailPanel({
 
   const handleDescriptionChange = (val: string) => {
     setDescription(val);
-    debouncedUpdateSpec(val, inputs, outputs, notes);
+    debouncedUpdateSpec(val, inputs, outputs, notes, technology, innerComponents);
   };
   const handleInputsChange = (val: string) => {
     setInputs(val);
-    debouncedUpdateSpec(description, val, outputs, notes);
+    debouncedUpdateSpec(description, val, outputs, notes, technology, innerComponents);
   };
   const handleOutputsChange = (val: string) => {
     setOutputs(val);
-    debouncedUpdateSpec(description, inputs, val, notes);
+    debouncedUpdateSpec(description, inputs, val, notes, technology, innerComponents);
   };
   const handleNotesChange = (val: string) => {
     setNotes(val);
-    debouncedUpdateSpec(description, inputs, outputs, val);
+    debouncedUpdateSpec(description, inputs, outputs, val, technology, innerComponents);
+  };
+  const handleTechnologyChange = (val: string) => {
+    setTechnology(val);
+    debouncedUpdateSpec(description, inputs, outputs, notes, val, innerComponents);
   };
   const handleNameChange = (val: string) => {
     setName(val);
@@ -113,13 +123,19 @@ export default function ComponentDetailPanel({
 
   // Inner components
   const handleAddInner = () => {
-    setInnerComponents(prev => [...prev, { name: '', description: '' }]);
+    const updated = [...innerComponents, { name: '', description: '' }];
+    setInnerComponents(updated);
+    debouncedUpdateSpec(description, inputs, outputs, notes, technology, updated);
   };
   const handleUpdateInner = (idx: number, field: 'name' | 'description', val: string) => {
-    setInnerComponents(prev => prev.map((ic, i) => i === idx ? { ...ic, [field]: val } : ic));
+    const updated = innerComponents.map((ic, i) => i === idx ? { ...ic, [field]: val } : ic);
+    setInnerComponents(updated);
+    debouncedUpdateSpec(description, inputs, outputs, notes, technology, updated);
   };
   const handleRemoveInner = (idx: number) => {
-    setInnerComponents(prev => prev.filter((_, i) => i !== idx));
+    const updated = innerComponents.filter((_, i) => i !== idx);
+    setInnerComponents(updated);
+    debouncedUpdateSpec(description, inputs, outputs, notes, technology, updated);
   };
 
   return (
@@ -163,6 +179,22 @@ export default function ComponentDetailPanel({
 
       {/* Scrollable content */}
       <div className="detail-body">
+        {/* Technology */}
+        {techOptions && (
+          <div className="detail-section">
+            <label className="detail-label">Technology</label>
+            <select
+              className="detail-select"
+              value={technology}
+              onChange={e => handleTechnologyChange(e.target.value)}
+            >
+              {techOptions.options.map(opt => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Description */}
         <div className="detail-section">
           <label className="detail-label">Description</label>

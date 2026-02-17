@@ -4,7 +4,6 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { SessionManager } from '../state/SessionManager.js';
 import {
   formatBACForPrompt,
   buildDevChatSystemContext,
@@ -13,12 +12,9 @@ import {
 } from '../../codegen/index.js';
 import { validateContractCompleteness } from '../../bac/index.js';
 import { slugify } from '../services/artifacts.js';
+import { resolveSession } from '../state/resolveSession.js';
 
 const router = Router();
-
-function getSessionManager(req: Request): SessionManager {
-  return req.app.locals.sessionManager as SessionManager;
-}
 
 // POST /api/agent/claude-code — SSE stream
 router.post('/claude-code', async (req: Request, res: Response) => {
@@ -29,8 +25,7 @@ router.post('/claude-code', async (req: Request, res: Response) => {
   });
 
   try {
-    const sm = getSessionManager(req);
-    const session = sm.getActiveSession();
+    const session = resolveSession(req);
     const { instruction, context: devContext, projectDocs: clientDocs } = req.body;
     const contextMode: 'canvas' | 'docs' | 'code' = devContext || 'canvas';
 
@@ -141,8 +136,7 @@ router.post('/claude-code/generate', async (req: Request, res: Response) => {
   });
 
   try {
-    const sm = getSessionManager(req);
-    const session = sm.getActiveSession();
+    const session = resolveSession(req);
     const { nodeId } = req.body as { nodeId?: string };
 
     if (!session.currentBAC) {

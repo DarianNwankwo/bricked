@@ -5,36 +5,52 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { SessionManager } from '../state/SessionManager.js';
-import type { SavedProject } from '../state/ProjectSession.js';
-import { generateId, nextComponentIndex } from '../state/ProjectSession.js';
 import { getLLMConfig, POPULAR_MODELS } from '../../llm/config.js';
 import { estimateCostFromComponents } from '../../deployer/cost-estimator.js';
-import { loadArtifacts, deleteArtifacts, slugify } from '../services/artifacts.js';
+import { optionalAuth, type AuthenticatedRequest } from '../middleware/auth.js';
+import { getDatabase } from '../db/client.js';
+import { resolveSession, getSessionManager } from '../state/resolveSession.js';
 
 const router = Router();
 
-function getSessionManager(req: Request): SessionManager {
-  return req.app.locals.sessionManager as SessionManager;
-}
-
 // POST /api/reset
-router.post('/reset', (req: Request, res: Response) => {
-  const sm = getSessionManager(req);
-  const session = sm.getActiveSession();
-  session.reset();
+router.post('/reset', optionalAuth, (req: AuthenticatedRequest, res: Response) => {
+  const { projectId } = req.body || {};
+  if (projectId) {
+    // Create a fresh session keyed by userId:projectId (or just projectId if unauthenticated)
+    const sm = getSessionManager(req);
+    const sessionKey = req.userId ? `${req.userId}:${projectId}` : projectId;
+    const session = sm.createSession(sessionKey, projectId);
+    sm.setActiveSession(sessionKey, projectId);
+    session.reset();
+    session.currentProjectId = projectId;
+  } else {
+    const session = resolveSession(req);
+    session.reset();
+  }
   import('../../agent/claude-code.js').then(m => m.clearConversation()).catch(() => {});
   res.json({ success: true });
 });
 
 // GET /api/config
-router.get('/config', (_req: Request, res: Response) => {
-  const sm = getSessionManager(_req);
-  const session = sm.getActiveSession();
+router.get('/config', optionalAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const session = resolveSession(req);
   try {
     const config = getLLMConfig();
+
+    // Load preferred model from DB if authenticated and no session model set
+    let model = session.selectedModel;
+    if (!model && req.userId) {
+      const db = getDatabase();
+      const prefs = await db.getUserPreferences(req.userId);
+      if (prefs?.preferredModel) {
+        model = prefs.preferredModel;
+        session.selectedModel = model; // hydrate session
+      }
+    }
+
     res.json({
-      model: session.selectedModel || config.model,
+      model: model || config.model,
       provider: config.provider,
       models: POPULAR_MODELS,
     });
@@ -49,12 +65,18 @@ router.get('/config', (_req: Request, res: Response) => {
 });
 
 // POST /api/model
-router.post('/model', (req: Request, res: Response) => {
+router.post('/model', optionalAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const sm = getSessionManager(req);
-    const session = sm.getActiveSession();
+    const session = resolveSession(req);
     const { model } = req.body;
     session.selectedModel = model;
+
+    // Persist to user preferences if authenticated
+    if (req.userId) {
+      const db = getDatabase();
+      await db.upsertUserPreferences(req.userId, { preferredModel: model });
+    }
+
     res.json({ success: true, model: session.selectedModel });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -63,20 +85,17 @@ router.post('/model', (req: Request, res: Response) => {
 
 // GET /api/settings
 router.get('/settings', (req: Request, res: Response) => {
-  const sm = getSessionManager(req);
-  const session = sm.getActiveSession();
+  const session = resolveSession(req);
   try {
     const config = getLLMConfig();
     res.json({
       model: session.selectedModel || config.model,
       provider: config.provider,
-      projectCount: sm.savedProjects.size,
     });
   } catch (error) {
     res.json({
       model: session.selectedModel || 'Not configured',
       provider: 'None',
-      projectCount: sm.savedProjects.size,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
   }
@@ -85,7 +104,7 @@ router.get('/settings', (req: Request, res: Response) => {
 // GET /api/suggestions
 router.get('/suggestions', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     if (!session.manualArchitecture || session.manualArchitecture.components.length === 0) {
       res.json({ suggestions: [] });
       return;
@@ -143,111 +162,6 @@ router.post('/cost', (req: Request, res: Response) => {
     const { components } = req.body;
     const cost = estimateCostFromComponents(components || []);
     res.json({ cost });
-  } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
-
-// ── In-memory project management (matches ui.ts behavior) ──────────────
-
-// GET /api/studio/projects
-router.get('/studio/projects', (req: Request, res: Response) => {
-  const sm = getSessionManager(req);
-  const projects = Array.from(sm.savedProjects.values()).map(p => ({
-    id: p.id,
-    name: p.name,
-    createdAt: p.createdAt,
-    editedAt: p.editedAt,
-    componentCount: p.architecture?.components.length || 0,
-  })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  res.json({ projects });
-});
-
-// POST /api/studio/projects — save current project
-router.post('/studio/projects', (req: Request, res: Response) => {
-  try {
-    const sm = getSessionManager(req);
-    const session = sm.getActiveSession();
-    const { name, documentation } = req.body || {};
-    session.refreshBACFromCurrentArchitecture();
-
-    if (!session.currentProjectId) {
-      session.currentProjectId = generateId();
-    }
-
-    const project = session.saveCurrentProject(sm.savedProjects, name, documentation);
-    res.json({ project: { ...project, componentCount: project.architecture?.components.length || 0 } });
-  } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
-
-// GET /api/studio/projects/:id — load a project
-router.get('/studio/projects/:id', async (req: Request, res: Response) => {
-  try {
-    const sm = getSessionManager(req);
-    const session = sm.getActiveSession();
-    const project = sm.savedProjects.get(req.params.id);
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-
-    session.loadFromSavedProject(project);
-
-    import('../../agent/claude-code.js').then(m => m.clearConversation()).catch(() => {});
-
-    session.currentProject.files.clear();
-    const stashed = await loadArtifacts(project.slug);
-    if (stashed) {
-      for (const file of stashed.files) {
-        session.currentProject.files.set(file.path, {
-          path: file.path,
-          content: file.content,
-          componentId: file.componentId,
-          generatedAt: new Date(stashed.manifest.generatedAt),
-          isManuallyEdited: file.isManuallyEdited,
-        });
-      }
-    }
-
-    const ir = session.manualArchitecture ? session.manualToIR(session.manualArchitecture) : null;
-
-    res.json({
-      project: { ...project, componentCount: project.architecture?.components.length || 0 },
-      architecture: session.manualArchitecture,
-      ir,
-      diagram: session.currentDiagram,
-      bac: session.currentBAC,
-      documentation: project.documentation || '',
-      hasFiles: session.currentProject.files.size > 0,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
-
-// DELETE /api/studio/projects/:id
-router.delete('/studio/projects/:id', async (req: Request, res: Response) => {
-  try {
-    const sm = getSessionManager(req);
-    const session = sm.getActiveSession();
-    const projectToDelete = sm.savedProjects.get(req.params.id);
-
-    if (!projectToDelete) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-
-    await deleteArtifacts(projectToDelete.slug);
-    sm.savedProjects.delete(req.params.id);
-
-    if (session.currentProjectId === req.params.id) {
-      session.reset();
-    }
-
-    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
