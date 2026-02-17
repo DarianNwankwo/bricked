@@ -1,4 +1,4 @@
-import type { User, Project, Environment, Deployment, UsageRecord, AIUsageRecord, UserPreferences, ProjectMember, ProjectInvite, DatabaseClient, Contact, Note, ContactInteraction } from './schema.js';
+import type { User, Project, Environment, Deployment, UsageRecord, AIUsageRecord, UserPreferences, ProjectMember, ProjectInvite, DatabaseClient, Feature, Message, ProjectFile, Contact, Note, ContactInteraction } from './schema.js';
 export declare class SQLiteClient implements DatabaseClient {
     private db;
     constructor(dbPath?: string);
@@ -61,6 +61,22 @@ export declare class SQLiteClient implements DatabaseClient {
     getProjectInvitesByProjectId(projectId: string): Promise<ProjectInvite[]>;
     acceptProjectInvite(token: string, userId: string): Promise<ProjectMember | null>;
     deleteProjectInvite(id: string): Promise<boolean>;
+    createFeature(projectId: string, title: string, description: string): Promise<Feature>;
+    getFeaturesByProjectId(projectId: string): Promise<Feature[]>;
+    getFeatureById(id: string): Promise<Feature | null>;
+    updateFeature(id: string, updates: Partial<Feature>): Promise<Feature | null>;
+    deleteFeature(id: string): Promise<boolean>;
+    private rowToFeature;
+    createMessage(data: Omit<Message, 'id' | 'createdAt'>): Promise<Message>;
+    getMessagesByProjectId(projectId: string, limit?: number): Promise<Message[]>;
+    deleteMessagesByProjectId(projectId: string): Promise<boolean>;
+    private rowToMessage;
+    upsertProjectFile(projectId: string, path: string, content: string, componentId?: string): Promise<ProjectFile>;
+    getProjectFilesByProjectId(projectId: string): Promise<ProjectFile[]>;
+    getProjectFile(projectId: string, path: string): Promise<ProjectFile | null>;
+    updateProjectFile(projectId: string, path: string, content: string): Promise<ProjectFile | null>;
+    deleteProjectFilesByProjectId(projectId: string): Promise<boolean>;
+    private rowToProjectFile;
     createContact(tenantId: string, data: Omit<Contact, 'id' | 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<Contact>;
     getContactById(id: string): Promise<Contact | null>;
     private rowToContact;

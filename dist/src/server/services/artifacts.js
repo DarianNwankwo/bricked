@@ -106,4 +106,56 @@ export async function deleteArtifacts(slug) {
         await rm(artifactsDir, { recursive: true, force: true });
     }
 }
+/**
+ * Analyze the structure of stashed artifacts for intelligent preview generation.
+ */
+export async function getArtifactStructure(slug) {
+    const artifactsDir = getArtifactsDir(slug);
+    const manifestPath = join(artifactsDir, 'manifest.json');
+    if (!existsSync(manifestPath))
+        return null;
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    const files = manifest.files.map(f => f.path);
+    const hasRootPackageJson = files.some(f => f === 'package.json');
+    // Detect framework
+    let framework = 'unknown';
+    if (files.some(f => f.includes('next.config'))) {
+        framework = 'next';
+    }
+    else if (files.some(f => f.includes('app.py') || f.includes('main.py') || f.includes('fastapi'))) {
+        framework = 'fastapi';
+    }
+    else if (files.some(f => f.includes('express') || f.includes('app.ts') || f.includes('server.ts'))) {
+        framework = 'express';
+    }
+    else if (files.some(f => f.endsWith('.html')) && !files.some(f => f.endsWith('.ts') || f.endsWith('.js') || f.endsWith('.py'))) {
+        framework = 'static';
+    }
+    // Detect component directories (top-level directories)
+    const directories = new Map();
+    for (const file of files) {
+        const parts = file.split('/');
+        if (parts.length > 1) {
+            const dir = parts[0];
+            const entry = directories.get(dir) || { hasDockerfile: false, hasPackageJson: false, fileCount: 0 };
+            entry.fileCount++;
+            if (parts[1] === 'Dockerfile')
+                entry.hasDockerfile = true;
+            if (parts[1] === 'package.json')
+                entry.hasPackageJson = true;
+            directories.set(dir, entry);
+        }
+    }
+    const components = Array.from(directories.entries()).map(([name, info]) => ({
+        name,
+        directory: name,
+        ...info,
+    }));
+    return {
+        hasPackageJson: hasRootPackageJson,
+        framework,
+        components,
+        totalFiles: files.length,
+    };
+}
 //# sourceMappingURL=artifacts.js.map

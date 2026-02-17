@@ -1,9 +1,14 @@
 // API client with auth token management
 
 const TOKEN_KEY = 'brick-auth-token';
+const SESSION_PROJECT_KEY = 'brick-session-project-id';
 
 function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
+}
+
+function getProjectId(): string | null {
+  return localStorage.getItem(SESSION_PROJECT_KEY);
 }
 
 export function setToken(token: string): void {
@@ -29,6 +34,10 @@ async function request<T>(
   };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+  const projectId = getProjectId();
+  if (projectId) {
+    headers['X-Project-Id'] = projectId;
   }
 
   const res = await fetch(path, {
@@ -127,7 +136,7 @@ export const studio = {
   getArchitecture: () =>
     request<{ architecture: import('./types').ManualArchitecture | null }>('/api/architecture'),
   setArchitecture: (architecture: import('./types').ManualArchitecture) =>
-    request<{ success: boolean }>('/api/architecture', { method: 'POST', body: JSON.stringify(architecture) }),
+    request<{ architecture: import('./types').ManualArchitecture; bac: import('./types').BrickAppContract }>('/api/architecture', { method: 'POST', body: JSON.stringify({ architecture }) }),
   addComponent: (component: Partial<import('./types').ArchComponent>) =>
     request<{ architecture: import('./types').ManualArchitecture; bac: import('./types').BrickAppContract }>(
       '/api/component',
@@ -164,6 +173,14 @@ export const studio = {
       '/api/architecture/name',
       { method: 'PUT', body: JSON.stringify({ name }) }
     ),
+  getTemplate: (id: string) =>
+    request<{
+      id: string;
+      name: string;
+      description: string;
+      components: Array<{ id: string; name: string; type: string; techOptions: string[]; defaultTech: string }>;
+      connections: Array<{ from: string; to: string; label?: string }>;
+    }>(`/api/templates/${id}`),
   loadTemplate: (templateId: string) =>
     request<{ architecture: import('./types').ManualArchitecture; bac: import('./types').BrickAppContract }>(
       '/api/template',
@@ -198,24 +215,16 @@ export const studio = {
     request<{ success: boolean; model: string }>('/api/model', { method: 'POST', body: JSON.stringify({ model }) }),
   getSettings: () =>
     request<{ model: string; provider: string; projectCount: number }>('/api/settings'),
-  reset: () =>
-    request<{ success: boolean }>('/api/reset', { method: 'POST' }),
+  reset: (projectId?: string) =>
+    request<{ success: boolean }>('/api/reset', { method: 'POST', body: projectId ? JSON.stringify({ projectId }) : undefined }),
 
-  // Saved projects (in-memory)
-  getSavedProjects: () =>
-    request<{ projects: import('./types').Project[] }>('/api/settings/projects'),
-  saveProject: (data: { name: string; slug: string }) =>
-    request<{ project: import('./types').Project }>('/api/settings/save', { method: 'POST', body: JSON.stringify(data) }),
-  loadProject: (id: string) =>
-    request<{
-      success: boolean;
-      project: import('./types').Project;
-      architecture: import('./types').ManualArchitecture;
-      bac: import('./types').BrickAppContract;
-      files: import('./types').ProjectFile[];
-    }>(`/api/settings/load/${id}`, { method: 'POST' }),
-  deleteProject: (id: string) =>
-    request<{ success: boolean }>(`/api/settings/project/${id}`, { method: 'DELETE' }),
+  // Docs
+  getDocs: () =>
+    request<{ documentation: string }>('/api/docs'),
+  generateDocs: () =>
+    request<{ documentation: string }>('/api/docs/generate', { method: 'POST' }),
+  updateDocs: (documentation: string) =>
+    request<{ success: boolean }>('/api/docs', { method: 'PUT', body: JSON.stringify({ documentation }) }),
 
   // Info
   getInfo: () =>
@@ -224,6 +233,45 @@ export const studio = {
       version: string;
       features: Record<string, boolean | string>;
     }>('/api/info'),
+};
+
+// Features (project-scoped)
+export const features = {
+  list: (projectId: string) =>
+    request<{ features: import('./types').Feature[] }>(`/api/projects/${projectId}/features`),
+  create: (projectId: string, data: { title: string; description: string }) =>
+    request<{ feature: import('./types').Feature }>(
+      `/api/projects/${projectId}/features`,
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+  update: (projectId: string, featureId: string, data: Partial<import('./types').Feature>) =>
+    request<{ feature: import('./types').Feature }>(
+      `/api/projects/${projectId}/features/${featureId}`,
+      { method: 'PATCH', body: JSON.stringify(data) }
+    ),
+  delete: (projectId: string, featureId: string) =>
+    request<{ success: boolean }>(
+      `/api/projects/${projectId}/features/${featureId}`,
+      { method: 'DELETE' }
+    ),
+};
+
+// Messages (project-scoped chat history)
+export const messages = {
+  list: (projectId: string, limit?: number) =>
+    request<{ messages: import('./types').ChatMessage[] }>(
+      `/api/projects/${projectId}/messages${limit ? `?limit=${limit}` : ''}`
+    ),
+  create: (projectId: string, data: { role: string; content: string; contextMode?: string; metadata?: Record<string, unknown> }) =>
+    request<{ message: import('./types').ChatMessage }>(
+      `/api/projects/${projectId}/messages`,
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+  clear: (projectId: string) =>
+    request<{ success: boolean }>(
+      `/api/projects/${projectId}/messages`,
+      { method: 'DELETE' }
+    ),
 };
 
 // Preview
@@ -236,6 +284,21 @@ export const preview = {
     request<import('./types').PreviewStatus>(`/api/preview/${projectId}/status`),
   rebuild: (projectId: string) =>
     request<import('./types').PreviewStatus>(`/api/preview/${projectId}/rebuild`, { method: 'POST' }),
+};
+
+// Deployments
+export const deployments = {
+  deploy: (projectId: string, environment: string) =>
+    request<{ deployment: import('./types').DeploymentInfo; message: string }>(
+      `/api/deployments/${projectId}/${environment}`,
+      { method: 'POST' }
+    ),
+  status: (deploymentId: string) =>
+    request<{ deployment: import('./types').DeploymentInfo }>(`/api/deployments/${deploymentId}`),
+  stop: (projectId: string, environment: string) =>
+    request<{ success: boolean }>(`/api/deployments/${projectId}/${environment}`, { method: 'DELETE' }),
+  history: (projectId: string, environment: string) =>
+    request<{ deployments: import('./types').DeploymentInfo[] }>(`/api/deployments/${projectId}/${environment}/history`),
 };
 
 // SSE streaming helpers
@@ -256,11 +319,13 @@ export async function streamGenerate(
   const token = getToken();
 
   try {
+    const streamProjectId = getProjectId();
     const res = await fetch('/api/generate-stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(streamProjectId ? { 'X-Project-Id': streamProjectId } : {}),
       },
       body: JSON.stringify({ message, reset }),
       signal: controller.signal,
@@ -332,11 +397,13 @@ export async function streamCodegen(
   const token = getToken();
 
   try {
+    const codegenProjectId = getProjectId();
     const res = await fetch('/api/generate-code', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(codegenProjectId ? { 'X-Project-Id': codegenProjectId } : {}),
       },
       body: JSON.stringify({ componentSpecs, strategy }),
       signal: controller.signal,

@@ -2,7 +2,8 @@
 import { Router } from 'express';
 import { getDatabase } from '../db/client.js';
 import { requireAuth } from '../middleware/auth.js';
-import { startPreview, stopPreview, getPreviewStatus, streamPreviewLogs, refreshPreviewStatus, } from '../services/preview.js';
+import { startPreview, stopPreview, getPreviewStatus, streamPreviewLogs, refreshPreviewStatus, previewFromArtifacts, rebuildPreview, getPreviewUrls, } from '../services/preview.js';
+import { hasStashedArtifacts, slugify } from '../services/artifacts.js';
 import { generateDockerComposeYAML } from '../../generator/docker-compose-generator.js';
 const router = Router();
 // All preview routes require authentication
@@ -48,17 +49,52 @@ router.post('/:projectId/start', async (req, res) => {
                 return res.status(403).json({ error: 'Not authorized' });
             }
         }
-        const session = await startPreview(project);
+        // Use artifact-aware preview when artifacts exist
+        const projectSlug = slugify(project.name || project.id);
+        const hasArtifacts = await hasStashedArtifacts(projectSlug);
+        const session = hasArtifacts
+            ? await previewFromArtifacts(projectSlug, project)
+            : await startPreview(project);
         res.json({
             status: session.status,
             services: session.services,
             startedAt: session.startedAt,
+            urls: getPreviewUrls(project.id),
         });
     }
     catch (error) {
         console.error('Start preview error:', error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Failed to start preview',
+        });
+    }
+});
+// Rebuild preview after code regeneration
+router.post('/:projectId/rebuild', async (req, res) => {
+    try {
+        const db = getDatabase();
+        const project = await db.getProjectById(req.params.projectId);
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        if (project.userId !== req.userId) {
+            const member = await db.getProjectMember(project.id, req.userId);
+            if (!member || member.role === 'viewer') {
+                return res.status(403).json({ error: 'Not authorized' });
+            }
+        }
+        const session = await rebuildPreview(project);
+        res.json({
+            status: session.status,
+            services: session.services,
+            startedAt: session.startedAt,
+            urls: getPreviewUrls(project.id),
+        });
+    }
+    catch (error) {
+        console.error('Rebuild preview error:', error);
+        res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to rebuild preview',
         });
     }
 });

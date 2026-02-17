@@ -18,7 +18,8 @@ export interface Project {
   description?: string;
   userId: string;
   status?: string;
-  environments?: Array<{ status: string; region?: string }>;
+  environments?: EnvironmentInfo[];
+  estimatedMonthlyCostCents?: number;
   createdAt: string;
   updatedAt: string;
   editedAt?: string;
@@ -76,6 +77,8 @@ export interface ComponentSpec {
   inputs?: string;
   outputs?: string;
   notes?: string;
+  technology?: string;
+  innerComponents?: Array<{ name: string; description: string }>;
 }
 
 export interface BrickAppContract {
@@ -151,6 +154,7 @@ export interface LLMModel {
 
 // Feature/Kanban types
 export type FeatureStatus = 'backlog' | 'in_progress' | 'review' | 'deployed';
+export type AgentStatus = 'waiting' | 'needs_context' | 'planning' | 'building' | 'testing' | 'complete' | 'error';
 
 export interface Feature {
   id: string;
@@ -160,9 +164,13 @@ export interface Feature {
   projectId: string;
   createdAt: string;
   updatedAt: string;
-  agentStatus?: 'idle' | 'planning' | 'building' | 'testing' | 'complete' | 'error';
+  agentStatus?: AgentStatus | null;
   agentMessage?: string;
+  timerEnd?: string | null;
 }
+
+// Chat context mode
+export type ChatContextMode = 'architecture' | 'code' | 'docs';
 
 // Chat types
 export interface ChatMessage {
@@ -179,6 +187,30 @@ export interface BACCompleteness {
   complete: boolean;
   incompleteNodes?: Array<{ nodeId: string; nodeName: string; fields: string[] }>;
   incompleteEdges?: Array<{ from: string; to: string; fields: string[] }>;
+  error?: string;
+}
+
+// Deployment types
+export type EnvironmentName = 'development' | 'staging' | 'production';
+export type EnvironmentStatus = 'not_deployed' | 'deploying' | 'live' | 'failed' | 'stopped';
+export type DeploymentStatus = 'pending' | 'building' | 'deploying' | 'live' | 'failed' | 'cancelled';
+
+export interface EnvironmentInfo {
+  id: string;
+  name: EnvironmentName;
+  status: EnvironmentStatus;
+  url?: string;
+  lastDeployedAt?: string;
+  monthlyCostCents?: number;
+}
+
+export interface DeploymentInfo {
+  id: string;
+  status: DeploymentStatus;
+  url?: string;
+  logs?: string[];
+  startedAt?: string;
+  completedAt?: string;
   error?: string;
 }
 

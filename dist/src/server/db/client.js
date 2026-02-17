@@ -2,6 +2,7 @@
 // Supports in-memory (default) and SQLite backends
 import crypto from 'crypto';
 import { SQLiteClient } from './sqlite-client.js';
+import { PostgresClient } from './postgres-client.js';
 // In-memory database implementation
 class InMemoryDB {
     users = new Map();
@@ -14,6 +15,10 @@ class InMemoryDB {
     userPreferences = new Map();
     projectMembers = new Map();
     projectInvites = new Map();
+    // Features, messages, project files
+    features = new Map();
+    messages = new Map();
+    projectFiles = new Map();
     // Foundational data layer
     contacts = new Map();
     notes = new Map();
@@ -69,6 +74,10 @@ class InMemoryDB {
             documentation: '',
             architecture,
             connectionLabels: {},
+            bac: null,
+            componentSpecs: {},
+            diagram: null,
+            lastGeneratedComponents: [],
             createdAt: new Date(),
             updatedAt: new Date(),
         };
@@ -287,6 +296,7 @@ class InMemoryDB {
             customIcons: prefs.customIcons || existing?.customIcons || {},
             githubToken: prefs.githubToken !== undefined ? prefs.githubToken : existing?.githubToken,
             githubUsername: prefs.githubUsername !== undefined ? prefs.githubUsername : existing?.githubUsername,
+            preferredModel: prefs.preferredModel !== undefined ? prefs.preferredModel : existing?.preferredModel,
         };
         this.userPreferences.set(userId, updated);
         return updated;
@@ -376,6 +386,136 @@ class InMemoryDB {
     }
     async deleteProjectInvite(id) {
         return this.projectInvites.delete(id);
+    }
+    // ==========================================================================
+    // Features
+    // ==========================================================================
+    async createFeature(projectId, title, description) {
+        const id = this.generateId();
+        const now = new Date();
+        // Get next position
+        const existing = Array.from(this.features.values()).filter(f => f.projectId === projectId);
+        const position = existing.length;
+        const feature = {
+            id,
+            projectId,
+            title,
+            description,
+            status: 'backlog',
+            position,
+            createdAt: now,
+            updatedAt: now,
+        };
+        this.features.set(id, feature);
+        return feature;
+    }
+    async getFeaturesByProjectId(projectId) {
+        return Array.from(this.features.values())
+            .filter(f => f.projectId === projectId)
+            .sort((a, b) => a.position - b.position);
+    }
+    async getFeatureById(id) {
+        return this.features.get(id) || null;
+    }
+    async updateFeature(id, updates) {
+        const feature = this.features.get(id);
+        if (!feature)
+            return null;
+        const updated = { ...feature, ...updates, updatedAt: new Date() };
+        this.features.set(id, updated);
+        return updated;
+    }
+    async deleteFeature(id) {
+        return this.features.delete(id);
+    }
+    // ==========================================================================
+    // Messages
+    // ==========================================================================
+    async createMessage(data) {
+        const id = this.generateId();
+        const message = { id, ...data, createdAt: new Date() };
+        this.messages.set(id, message);
+        return message;
+    }
+    async getMessagesByProjectId(projectId, limit) {
+        const msgs = Array.from(this.messages.values())
+            .filter(m => m.projectId === projectId)
+            .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+        if (limit)
+            return msgs.slice(-limit);
+        return msgs;
+    }
+    async deleteMessagesByProjectId(projectId) {
+        let deleted = false;
+        for (const [id, msg] of this.messages) {
+            if (msg.projectId === projectId) {
+                this.messages.delete(id);
+                deleted = true;
+            }
+        }
+        return deleted;
+    }
+    // ==========================================================================
+    // Project Files
+    // ==========================================================================
+    async upsertProjectFile(projectId, path, content, componentId) {
+        // Check if file already exists for this project+path
+        const existing = Array.from(this.projectFiles.values()).find(f => f.projectId === projectId && f.path === path);
+        if (existing) {
+            const updated = {
+                ...existing,
+                content,
+                componentId: componentId !== undefined ? componentId : existing.componentId,
+                updatedAt: new Date(),
+            };
+            this.projectFiles.set(existing.id, updated);
+            return updated;
+        }
+        const id = this.generateId();
+        const now = new Date();
+        const file = {
+            id,
+            projectId,
+            path,
+            content,
+            componentId,
+            isManuallyEdited: false,
+            generatedAt: now,
+            updatedAt: now,
+        };
+        this.projectFiles.set(id, file);
+        return file;
+    }
+    async getProjectFilesByProjectId(projectId) {
+        return Array.from(this.projectFiles.values())
+            .filter(f => f.projectId === projectId)
+            .sort((a, b) => a.path.localeCompare(b.path));
+    }
+    async getProjectFile(projectId, path) {
+        return Array.from(this.projectFiles.values()).find(f => f.projectId === projectId && f.path === path) || null;
+    }
+    async updateProjectFile(projectId, path, content) {
+        const file = Array.from(this.projectFiles.values()).find(f => f.projectId === projectId && f.path === path);
+        if (!file)
+            return null;
+        const updated = {
+            ...file,
+            content,
+            isManuallyEdited: true,
+            updatedAt: new Date(),
+        };
+        this.projectFiles.set(file.id, updated);
+        return updated;
+    }
+    async deleteProjectFilesByProjectId(projectId) {
+        let deleted = false;
+        for (const [id, file] of this.projectFiles) {
+            if (file.projectId === projectId) {
+                this.projectFiles.delete(id);
+                deleted = true;
+            }
+        }
+        return deleted;
     }
     // ==========================================================================
     // Foundational Data Layer - Contacts
@@ -473,8 +613,11 @@ class InMemoryDB {
 let dbInstance = null;
 export function getDatabase() {
     if (!dbInstance) {
-        const usesSQLite = process.env.BRICK_DB === 'sqlite' || process.env.BRICK_DB_PATH;
-        if (usesSQLite) {
+        if (process.env.DATABASE_URL) {
+            console.log('  Using PostgreSQL database');
+            dbInstance = new PostgresClient();
+        }
+        else if (process.env.BRICK_DB === 'sqlite' || process.env.BRICK_DB_PATH) {
             console.log('  Using SQLite database');
             dbInstance = new SQLiteClient();
         }

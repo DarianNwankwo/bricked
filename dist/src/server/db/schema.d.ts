@@ -31,6 +31,10 @@ export interface Project {
         }>;
     };
     connectionLabels: Record<string, string>;
+    bac?: Record<string, unknown> | null;
+    componentSpecs?: Record<string, Record<string, unknown>>;
+    diagram?: string | null;
+    lastGeneratedComponents?: Array<Record<string, unknown>>;
     createdAt: Date;
     updatedAt: Date;
     archivedAt?: Date;
@@ -88,6 +92,7 @@ export interface UserPreferences {
     customIcons: Record<string, string>;
     githubToken?: string;
     githubUsername?: string;
+    preferredModel?: string;
 }
 export interface ProjectMember {
     id: string;
@@ -108,6 +113,39 @@ export interface ProjectInvite {
     createdAt: Date;
     expiresAt: Date;
     acceptedAt?: Date;
+}
+export interface Feature {
+    id: string;
+    projectId: string;
+    title: string;
+    description: string;
+    status: 'backlog' | 'in_progress' | 'review' | 'deployed';
+    agentStatus?: 'waiting' | 'needs_context' | 'planning' | 'building' | 'testing' | 'complete' | 'error' | null;
+    agentMessage?: string;
+    position: number;
+    timerEnd?: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+}
+export interface Message {
+    id: string;
+    projectId: string;
+    userId: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    contextMode: 'architecture' | 'code' | 'docs';
+    metadata: Record<string, unknown>;
+    createdAt: Date;
+}
+export interface ProjectFile {
+    id: string;
+    projectId: string;
+    path: string;
+    content: string;
+    componentId?: string;
+    isManuallyEdited: boolean;
+    generatedAt: Date;
+    updatedAt: Date;
 }
 export interface Contact {
     id: string;
@@ -201,6 +239,19 @@ export interface DatabaseClient {
     getProjectInvitesByProjectId(projectId: string): Promise<ProjectInvite[]>;
     acceptProjectInvite(token: string, userId: string): Promise<ProjectMember | null>;
     deleteProjectInvite(id: string): Promise<boolean>;
+    createFeature(projectId: string, title: string, description: string): Promise<Feature>;
+    getFeaturesByProjectId(projectId: string): Promise<Feature[]>;
+    getFeatureById(id: string): Promise<Feature | null>;
+    updateFeature(id: string, updates: Partial<Feature>): Promise<Feature | null>;
+    deleteFeature(id: string): Promise<boolean>;
+    createMessage(data: Omit<Message, 'id' | 'createdAt'>): Promise<Message>;
+    getMessagesByProjectId(projectId: string, limit?: number): Promise<Message[]>;
+    deleteMessagesByProjectId(projectId: string): Promise<boolean>;
+    upsertProjectFile(projectId: string, path: string, content: string, componentId?: string): Promise<ProjectFile>;
+    getProjectFilesByProjectId(projectId: string): Promise<ProjectFile[]>;
+    getProjectFile(projectId: string, path: string): Promise<ProjectFile | null>;
+    updateProjectFile(projectId: string, path: string, content: string): Promise<ProjectFile | null>;
+    deleteProjectFilesByProjectId(projectId: string): Promise<boolean>;
     createContact(tenantId: string, data: Omit<Contact, 'id' | 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<Contact>;
     getContactById(id: string): Promise<Contact | null>;
     getContactsByTenantId(tenantId: string, status?: Contact['status']): Promise<Contact[]>;

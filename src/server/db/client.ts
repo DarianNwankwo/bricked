@@ -13,6 +13,9 @@ import type {
   ProjectMember,
   ProjectInvite,
   DatabaseClient,
+  Feature,
+  Message,
+  ProjectFile,
   Contact,
   Note,
   ContactInteraction,
@@ -32,6 +35,11 @@ class InMemoryDB implements DatabaseClient {
   private userPreferences: Map<string, UserPreferences> = new Map();
   private projectMembers: Map<string, ProjectMember> = new Map();
   private projectInvites: Map<string, ProjectInvite> = new Map();
+
+  // Features, messages, project files
+  private features: Map<string, Feature> = new Map();
+  private messages: Map<string, Message> = new Map();
+  private projectFiles: Map<string, ProjectFile> = new Map();
 
   // Foundational data layer
   private contacts: Map<string, Contact> = new Map();
@@ -95,6 +103,10 @@ class InMemoryDB implements DatabaseClient {
       documentation: '',
       architecture,
       connectionLabels: {},
+      bac: null,
+      componentSpecs: {},
+      diagram: null,
+      lastGeneratedComponents: [],
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -349,6 +361,7 @@ class InMemoryDB implements DatabaseClient {
       customIcons: prefs.customIcons || existing?.customIcons || {},
       githubToken: prefs.githubToken !== undefined ? prefs.githubToken : existing?.githubToken,
       githubUsername: prefs.githubUsername !== undefined ? prefs.githubUsername : existing?.githubUsername,
+      preferredModel: prefs.preferredModel !== undefined ? prefs.preferredModel : existing?.preferredModel,
     };
     this.userPreferences.set(userId, updated);
     return updated;
@@ -450,6 +463,155 @@ class InMemoryDB implements DatabaseClient {
 
   async deleteProjectInvite(id: string): Promise<boolean> {
     return this.projectInvites.delete(id);
+  }
+
+  // ==========================================================================
+  // Features
+  // ==========================================================================
+
+  async createFeature(projectId: string, title: string, description: string): Promise<Feature> {
+    const id = this.generateId();
+    const now = new Date();
+    // Get next position
+    const existing = Array.from(this.features.values()).filter(f => f.projectId === projectId);
+    const position = existing.length;
+    const feature: Feature = {
+      id,
+      projectId,
+      title,
+      description,
+      status: 'backlog',
+      position,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.features.set(id, feature);
+    return feature;
+  }
+
+  async getFeaturesByProjectId(projectId: string): Promise<Feature[]> {
+    return Array.from(this.features.values())
+      .filter(f => f.projectId === projectId)
+      .sort((a, b) => a.position - b.position);
+  }
+
+  async getFeatureById(id: string): Promise<Feature | null> {
+    return this.features.get(id) || null;
+  }
+
+  async updateFeature(id: string, updates: Partial<Feature>): Promise<Feature | null> {
+    const feature = this.features.get(id);
+    if (!feature) return null;
+    const updated = { ...feature, ...updates, updatedAt: new Date() };
+    this.features.set(id, updated);
+    return updated;
+  }
+
+  async deleteFeature(id: string): Promise<boolean> {
+    return this.features.delete(id);
+  }
+
+  // ==========================================================================
+  // Messages
+  // ==========================================================================
+
+  async createMessage(data: Omit<Message, 'id' | 'createdAt'>): Promise<Message> {
+    const id = this.generateId();
+    const message: Message = { id, ...data, createdAt: new Date() };
+    this.messages.set(id, message);
+    return message;
+  }
+
+  async getMessagesByProjectId(projectId: string, limit?: number): Promise<Message[]> {
+    const msgs = Array.from(this.messages.values())
+      .filter(m => m.projectId === projectId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    if (limit) return msgs.slice(-limit);
+    return msgs;
+  }
+
+  async deleteMessagesByProjectId(projectId: string): Promise<boolean> {
+    let deleted = false;
+    for (const [id, msg] of this.messages) {
+      if (msg.projectId === projectId) {
+        this.messages.delete(id);
+        deleted = true;
+      }
+    }
+    return deleted;
+  }
+
+  // ==========================================================================
+  // Project Files
+  // ==========================================================================
+
+  async upsertProjectFile(projectId: string, path: string, content: string, componentId?: string): Promise<ProjectFile> {
+    // Check if file already exists for this project+path
+    const existing = Array.from(this.projectFiles.values()).find(
+      f => f.projectId === projectId && f.path === path
+    );
+    if (existing) {
+      const updated: ProjectFile = {
+        ...existing,
+        content,
+        componentId: componentId !== undefined ? componentId : existing.componentId,
+        updatedAt: new Date(),
+      };
+      this.projectFiles.set(existing.id, updated);
+      return updated;
+    }
+    const id = this.generateId();
+    const now = new Date();
+    const file: ProjectFile = {
+      id,
+      projectId,
+      path,
+      content,
+      componentId,
+      isManuallyEdited: false,
+      generatedAt: now,
+      updatedAt: now,
+    };
+    this.projectFiles.set(id, file);
+    return file;
+  }
+
+  async getProjectFilesByProjectId(projectId: string): Promise<ProjectFile[]> {
+    return Array.from(this.projectFiles.values())
+      .filter(f => f.projectId === projectId)
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  async getProjectFile(projectId: string, path: string): Promise<ProjectFile | null> {
+    return Array.from(this.projectFiles.values()).find(
+      f => f.projectId === projectId && f.path === path
+    ) || null;
+  }
+
+  async updateProjectFile(projectId: string, path: string, content: string): Promise<ProjectFile | null> {
+    const file = Array.from(this.projectFiles.values()).find(
+      f => f.projectId === projectId && f.path === path
+    );
+    if (!file) return null;
+    const updated: ProjectFile = {
+      ...file,
+      content,
+      isManuallyEdited: true,
+      updatedAt: new Date(),
+    };
+    this.projectFiles.set(file.id, updated);
+    return updated;
+  }
+
+  async deleteProjectFilesByProjectId(projectId: string): Promise<boolean> {
+    let deleted = false;
+    for (const [id, file] of this.projectFiles) {
+      if (file.projectId === projectId) {
+        this.projectFiles.delete(id);
+        deleted = true;
+      }
+    }
+    return deleted;
   }
 
   // ==========================================================================

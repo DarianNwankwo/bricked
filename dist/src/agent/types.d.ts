@@ -6,6 +6,7 @@
  * - Augment On Top: Edit code via external agents (Claude Code, Codex)
  */
 import type { GeneratedFile } from '../codegen/index.js';
+import type { BrickAppContract } from '../types/bac.js';
 export interface AgentContext {
     project: {
         id: string;
@@ -33,12 +34,28 @@ export interface AgentContext {
     files: GeneratedFile[];
     conversationHistory: ChatMessage[];
     userPreferences: Record<string, unknown>;
+    bac?: BrickAppContract;
+    systemContext?: string;
 }
 export interface ChatMessage {
     role: 'user' | 'assistant' | 'system';
     content: string;
 }
-export type AgentActionType = 'create_file' | 'edit_file' | 'delete_file' | 'run_command' | 'deploy' | 'preview';
+export type AgentActionType = 'create_file' | 'edit_file' | 'delete_file' | 'run_command' | 'deploy' | 'preview' | 'verify';
+export interface VerificationCheck {
+    name: string;
+    url: string;
+    passed: boolean;
+    httpStatus?: number;
+    consoleErrors?: string[];
+    screenshotPath?: string;
+    error?: string;
+}
+export interface VerificationResult {
+    passed: boolean;
+    checks: VerificationCheck[];
+    timestamp: string;
+}
 export interface AgentAction {
     type: AgentActionType;
     payload: Record<string, unknown>;
@@ -49,9 +66,12 @@ export interface AgentResult {
     updatedFiles?: GeneratedFile[];
 }
 export type AgentMode = 'build_within' | 'augment';
+export type AgentDomain = 'bac' | 'codegen' | 'docs';
 export interface Agent {
     name: string;
     mode: AgentMode;
+    domain?: AgentDomain;
     execute(context: AgentContext, instruction: string): Promise<AgentResult>;
+    canHandle?(instruction: string): boolean;
 }
 //# sourceMappingURL=types.d.ts.map

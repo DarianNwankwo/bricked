@@ -7,9 +7,11 @@ import { generateArchitecture, refineArchitecture } from '../../llm/index.js';
 import { parse } from '../../parser/index.js';
 import { transform } from '../../transformer/index.js';
 import { generate } from '../../generator/index.js';
+import { deriveBrickAppContract } from '../../bac/index.js';
 export const chatCommand = new Command('chat')
     .description('Interactive mode to design and refine your architecture')
     .option('-o, --output <file>', 'Output file path', 'appspec.yaml')
+    .option('--bac-output <file>', 'Also write a derived Brick App Contract JSON file')
     .action(async (options) => {
     console.log(chalk.bold('\nWelcome to Brick Interactive Mode\n'));
     console.log(chalk.dim('Describe your application and I\'ll design the architecture.'));
@@ -62,8 +64,26 @@ export const chatCommand = new Command('chat')
                 const ast = parse(currentDiagram);
                 const ir = transform(ast);
                 const appspec = generate(ir);
+                const bac = deriveBrickAppContract({
+                    appName: ir.name,
+                    region: ir.region,
+                    intent: conversationHistory.find(message => message.role === 'user')?.content,
+                    components: ir.components.map(component => ({
+                        id: component.id,
+                        name: component.name,
+                        type: component.type,
+                        connections: component.connections,
+                    })),
+                    connections: ir.components.flatMap(component => (component.connections || []).map(to => ({ from: component.id, to }))),
+                });
                 await writeFile(options.output, appspec);
+                if (options.bacOutput) {
+                    await writeFile(options.bacOutput, JSON.stringify(bac, null, 2));
+                }
                 spinner.succeed(chalk.green(`AppSpec written to ${options.output}`));
+                if (options.bacOutput) {
+                    console.log(chalk.dim(`  BAC: ${chalk.cyan(options.bacOutput)}`));
+                }
                 console.log(chalk.dim('\nNext steps:'));
                 console.log(chalk.dim(`  1. Review: ${chalk.cyan(`cat ${options.output}`)}`));
                 console.log(chalk.dim(`  2. Deploy: ${chalk.cyan(`brick deploy ${options.output}`)}`));

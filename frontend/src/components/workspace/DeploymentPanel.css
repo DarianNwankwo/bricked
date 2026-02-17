@@ -1,0 +1,141 @@
+.deploy-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.deploy-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.deploy-empty h3 {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+/* Environment cards grid */
+.deploy-env-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.deploy-env-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color var(--transition);
+}
+
+.deploy-env-card:hover {
+  border-color: var(--accent);
+}
+
+.deploy-env-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deploy-env-name {
+  font-size: 13px;
+  font-weight: 500;
+  flex: 1;
+}
+
+.deploy-env-status {
+  flex-shrink: 0;
+}
+
+.deploy-env-url {
+  color: var(--accent);
+  text-decoration: none;
+  display: block;
+}
+
+.deploy-env-url:hover {
+  text-decoration: underline;
+}
+
+.deploy-env-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.deploy-env-actions {
+  margin-top: auto;
+  display: flex;
+  gap: 6px;
+}
+
+/* Cost estimate */
+.deploy-cost-estimate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+/* Log viewer */
+.deploy-log-viewer {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.deploy-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.deploy-log-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deploy-log-content {
+  background: #0d0d0d;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.deploy-log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Responsive: stack cards below 600px */
+@media (max-width: 600px) {
+  .deploy-env-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -221,6 +221,13 @@ export function setupWebSocket(httpServer) {
     }, 30000); // Check every 30 seconds
     return io;
 }
+/**
+ * Broadcast an event to all users in a project room.
+ * Used by API routes to push real-time updates (feature changes, agent status, etc.)
+ */
+export function broadcastToProject(io, projectId, event, data) {
+    io.to(`project:${projectId}`).emit(event, data);
+}
 // Export for testing
 export { projectDocs, projectPresence };
 //# sourceMappingURL=index.js.map

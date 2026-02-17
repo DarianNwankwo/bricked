@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -21,6 +21,7 @@ import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
 import type { ManualArchitecture, BrickAppContract, ComponentType, BACCompleteness, ComponentSpec, ArchConnection } from '../../api/types';
 import { TYPE_COLORS, TYPE_ICONS } from './constants';
+import { estimateMonthlyCostCents, formatCostDollars } from '../../utils/cost';
 import EdgeEditPopover from './EdgeEditPopover';
 import './ArchitectureCanvas.css';
 
@@ -180,6 +181,29 @@ function CanvasInner({
   const [selectedEdge, setSelectedEdge] = useState<{ connection: ArchConnection; position: { x: number; y: number } } | null>(null);
   const reactFlowInstance = useReactFlow();
   const canvasRef = useRef<HTMLDivElement>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
+
+  // Click-outside and Escape to dismiss palette
+  useEffect(() => {
+    if (!showPalette) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      if (paletteRef.current && !paletteRef.current.contains(e.target as globalThis.Node)) {
+        setShowPalette(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowPalette(false);
+    };
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleMouseDown);
+      document.addEventListener('keydown', handleKeyDown);
+    }, 50);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showPalette]);
 
   // Compute connection counts per node
   const connectionCounts = useMemo(() => {
@@ -356,6 +380,12 @@ function CanvasInner({
     : edgeType === 'step' ? 'solar:stairs-linear'
     : 'solar:graph-new-linear';
 
+  // Cost estimate
+  const costEstimate = useMemo(() => {
+    if (!architecture) return null;
+    return estimateMonthlyCostCents(architecture.components);
+  }, [architecture]);
+
   // Empty state
   if (!architecture || architecture.components.length === 0) {
     return (
@@ -371,7 +401,7 @@ function CanvasInner({
         </button>
 
         {showPalette && (
-          <div className="component-palette">
+          <div className="component-palette" ref={paletteRef}>
             {Object.entries(TYPE_ICONS).map(([type, icon]) => (
               <button
                 key={type}
@@ -432,13 +462,19 @@ function CanvasInner({
                 <iconify-icon icon="solar:trash-bin-minimalistic-linear" width={16} />
               </button>
             )}
+            {costEstimate && costEstimate.totalCents > 0 && (
+              <span className="canvas-cost-badge" title="Estimated monthly cost">
+                <iconify-icon icon="solar:wallet-linear" width={13} />
+                ~{formatCostDollars(costEstimate.totalCents)}/mo
+              </span>
+            )}
           </div>
         </Panel>
 
         {/* Component palette */}
         {showPalette && (
           <Panel position="top-right">
-            <div className="component-palette" style={{ marginTop: 44 }}>
+            <div className="component-palette" ref={paletteRef} style={{ marginTop: 44 }}>
               {Object.entries(TYPE_ICONS).map(([type, icon]) => (
                 <button
                   key={type}

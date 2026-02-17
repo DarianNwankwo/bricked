@@ -16,5 +16,10 @@ interface UserPresence {
 }
 declare const projectPresence: Map<string, Map<string, UserPresence>>;
 export declare function setupWebSocket(httpServer: HttpServer): Server;
+/**
+ * Broadcast an event to all users in a project room.
+ * Used by API routes to push real-time updates (feature changes, agent status, etc.)
+ */
+export declare function broadcastToProject(io: Server, projectId: string, event: string, data: unknown): void;
 export { projectDocs, projectPresence };
 //# sourceMappingURL=index.d.ts.map

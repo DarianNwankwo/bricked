@@ -4,23 +4,20 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { SessionManager } from '../state/SessionManager.js';
 import type { ComponentType } from '../state/ProjectSession.js';
 import type { BrickAppContract, BACPatch } from '../../types/bac.js';
 import type { ChatMessage } from '../../llm/index.js';
 import { validateBrickAppContract, validateContractCompleteness, bacToArchitecture } from '../../bac/index.js';
 import { getLLMConfig } from '../../llm/config.js';
 import { INTENT_TO_BAC_PROMPT } from '../../codegen/index.js';
+import { resolveSession } from '../state/resolveSession.js';
+import { syncSessionToDb } from '../services/session-sync.js';
 
 const router = Router();
 
-function getSessionManager(req: Request): SessionManager {
-  return req.app.locals.sessionManager as SessionManager;
-}
-
 // GET /api/bac
 router.get('/', (req: Request, res: Response) => {
-  const session = getSessionManager(req).getActiveSession();
+  const session = resolveSession(req);
   session.refreshBACFromCurrentArchitecture();
 
   if (!session.currentBAC) {
@@ -35,7 +32,7 @@ router.get('/', (req: Request, res: Response) => {
 // PUT /api/bac — replace BAC and sync back to graph
 router.put('/', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { bac } = req.body as { bac: BrickAppContract };
 
     if (!bac) {
@@ -74,6 +71,7 @@ router.put('/', (req: Request, res: Response) => {
     }
 
     const completeness = validateContractCompleteness(bac);
+    syncSessionToDb(session).catch(() => {});
     res.json({ bac: session.currentBAC, validation, completeness, architecture: session.manualArchitecture });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -83,7 +81,7 @@ router.put('/', (req: Request, res: Response) => {
 // PATCH /api/bac — structured patch operations
 router.patch('/', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { patches } = req.body as { patches: BACPatch[] };
 
     if (!session.currentBAC) {
@@ -98,6 +96,7 @@ router.patch('/', (req: Request, res: Response) => {
 
     const { bac: patched, architecture, completeness } = session.applyBacPatchesAndSync(patches);
     const validation = validateBrickAppContract(patched);
+    syncSessionToDb(session).catch(() => {});
     res.json({ bac: patched, validation, completeness, architecture });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -107,7 +106,7 @@ router.patch('/', (req: Request, res: Response) => {
 // POST /api/bac/from-intent — generate BAC from natural language
 router.post('/from-intent', async (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { intent } = req.body as { intent: string };
 
     if (!intent || typeof intent !== 'string') {
@@ -159,6 +158,7 @@ router.post('/from-intent', async (req: Request, res: Response) => {
       }
 
       const completeness = validateContractCompleteness(bac);
+      syncSessionToDb(session).catch(() => {});
       res.json({ bac, validation, completeness, architecture: session.manualArchitecture });
     } else {
       res.status(400).json({ error: 'Generated BAC failed validation', validation, rawBac: bac });
@@ -170,7 +170,7 @@ router.post('/from-intent', async (req: Request, res: Response) => {
 
 // GET /api/bac/completeness
 router.get('/completeness', (req: Request, res: Response) => {
-  const session = getSessionManager(req).getActiveSession();
+  const session = resolveSession(req);
 
   if (!session.currentBAC) {
     res.json({ complete: false, incompleteNodes: [], incompleteEdges: [], error: 'No BAC available' });

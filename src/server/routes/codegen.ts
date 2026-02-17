@@ -6,7 +6,6 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
-import type { SessionManager } from '../state/SessionManager.js';
 import type { ComponentSpec, ProjectFile } from '../state/ProjectSession.js';
 import { parse } from '../../parser/index.js';
 import { transform } from '../../transformer/index.js';
@@ -20,12 +19,11 @@ import {
   type GeneratedFile,
 } from '../../codegen/index.js';
 import { stashArtifacts } from '../services/artifacts.js';
+import { resolveSession } from '../state/resolveSession.js';
+import { syncSessionToDb } from '../services/session-sync.js';
+import { getDatabase } from '../db/client.js';
 
 const router = Router();
-
-function getSessionManager(req: Request): SessionManager {
-  return req.app.locals.sessionManager as SessionManager;
-}
 
 // ── Diff helpers ────────────────────────────────────────────────────────
 
@@ -138,17 +136,18 @@ function buildEditRequest(
 
 // GET /api/component-specs
 router.get('/component-specs', (req: Request, res: Response) => {
-  const session = getSessionManager(req).getActiveSession();
+  const session = resolveSession(req);
   res.json({ componentSpecs: session.currentProject.componentSpecs, bac: session.currentBAC });
 });
 
 // PUT /api/component-specs
 router.put('/component-specs', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { componentSpecs } = req.body || {};
     session.currentProject.componentSpecs = (componentSpecs || {}) as Record<string, ComponentSpec>;
     session.refreshBACFromCurrentArchitecture();
+    syncSessionToDb(session).catch(() => {});
     res.json({ success: true, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -157,8 +156,7 @@ router.put('/component-specs', (req: Request, res: Response) => {
 
 // POST /api/generate-code — SSE streaming code generation
 router.post('/generate-code', async (req: Request, res: Response) => {
-  const sm = getSessionManager(req);
-  const session = sm.getActiveSession();
+  const session = resolveSession(req);
 
   if (session.isGeneratingCode) {
     res.status(429).json({ error: 'Code generation already in progress' });
@@ -313,15 +311,17 @@ router.post('/generate-code', async (req: Request, res: Response) => {
     session.currentProject.lastGeneratedComponents = components;
     session.refreshBACFromCurrentArchitecture();
 
-    const savedProject = session.currentProjectId ? sm.savedProjects.get(session.currentProjectId) : null;
-    if (savedProject) {
-      const artifactSlug = savedProject.slug;
-      const artifactFiles = Array.from(session.currentProject.files.values()).map(f => ({
-        path: f.path,
-        content: f.content,
-        componentId: f.componentId,
-      }));
-      await stashArtifacts(artifactSlug, savedProject.id, artifactFiles);
+    if (session.currentProjectId) {
+      const db = getDatabase();
+      const dbProject = await db.getProjectById(session.currentProjectId);
+      if (dbProject) {
+        const artifactFiles = Array.from(session.currentProject.files.values()).map(f => ({
+          path: f.path,
+          content: f.content,
+          componentId: f.componentId,
+        }));
+        await stashArtifacts(dbProject.slug, dbProject.id, artifactFiles);
+      }
     }
 
     res.write(`data: ${JSON.stringify({
@@ -341,7 +341,7 @@ router.post('/generate-code', async (req: Request, res: Response) => {
 
 // GET /api/files
 router.get('/files', (req: Request, res: Response) => {
-  const session = getSessionManager(req).getActiveSession();
+  const session = resolveSession(req);
   const files = Array.from(session.currentProject.files.values()).map(f => ({
     path: f.path,
     componentId: f.componentId,
@@ -352,7 +352,7 @@ router.get('/files', (req: Request, res: Response) => {
 
 // GET /api/file
 router.get('/file', (req: Request, res: Response) => {
-  const session = getSessionManager(req).getActiveSession();
+  const session = resolveSession(req);
   const filePath = req.query.path as string;
   if (!filePath) {
     res.status(400).json({ error: 'Missing path parameter' });
@@ -369,7 +369,7 @@ router.get('/file', (req: Request, res: Response) => {
 // PUT /api/file
 router.put('/file', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { path: filePath, content } = req.body;
     const file = session.currentProject.files.get(filePath);
     if (!file) {
@@ -387,7 +387,7 @@ router.put('/file', (req: Request, res: Response) => {
 
 // GET /api/download
 router.get('/download', (req: Request, res: Response) => {
-  const session = getSessionManager(req).getActiveSession();
+  const session = resolveSession(req);
   const files = Array.from(session.currentProject.files.values()).map(f => ({
     path: f.path,
     content: f.content,

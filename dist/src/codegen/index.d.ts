@@ -1,4 +1,4 @@
-export { planCodeStructure, type FilePlan, type CodePlan, type Component } from './planner.js';
-export { generateFile, generateFileStream, generateAllFiles, type GeneratedFile, type GenerateFileParams, type GenerateAllParams, } from './generator.js';
-export { CODE_PLANNER_PROMPT, CODE_GENERATOR_PROMPT, CODE_EDIT_PROMPT, formatComponentForPrompt, formatArchitectureForPrompt, } from './prompts.js';
+export { planCodeStructure, planCodeStructureFromBAC, type FilePlan, type CodePlan, type Component } from './planner.js';
+export { generateFile, generateFileFromBAC, editFile, generateFileStream, generateAllFiles, type GeneratedFile, type GenerateFileParams, type GenerateFileFromBACParams, type EditFileParams, type GenerateAllParams, } from './generator.js';
+export { CODE_PLANNER_PROMPT, CODE_GENERATOR_PROMPT, CODE_EDIT_PROMPT, BAC_CODE_PLANNER_PROMPT, BAC_CODE_GENERATOR_PROMPT, formatComponentForPrompt, formatArchitectureForPrompt, formatBACForPrompt, formatNodeContractForPrompt, INTENT_TO_BAC_PROMPT, BAC_DEV_CHAT_SYSTEM_PROMPT, buildDevChatSystemContext, DOCS_DEV_CHAT_SYSTEM_PROMPT, buildDocsChatSystemContext, CODE_DEV_CHAT_SYSTEM_PROMPT, buildCodeChatSystemContext, } from './prompts.js';
 //# sourceMappingURL=index.d.ts.map

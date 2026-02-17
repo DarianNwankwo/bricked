@@ -1,3 +1,4 @@
+import './digitalocean.js';
 import type { Deployment, Environment, Project } from '../db/schema.js';
 declare class DeploymentService {
     calculateMonthlyCost(project: Project): number;

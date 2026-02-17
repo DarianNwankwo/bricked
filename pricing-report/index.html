@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brick Studio - Pricing Strategy Report</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a26;
+    --border: #2a2a3a;
+    --text: #e4e4ef;
+    --text-dim: #8888a0;
+    --accent: #6366f1;
+    --accent2: #818cf8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --amber: #f59e0b;
+    --cyan: #06b6d4;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  .hero {
+    padding: 80px 40px 60px;
+    text-align: center;
+    background: linear-gradient(135deg, #0a0a1a 0%, #1a1030 50%, #0a0a1a 100%);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at 50% 50%, rgba(99,102,241,0.06) 0%, transparent 60%);
+    animation: pulse 8s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 0.5; }
+    50% { transform: scale(1.1); opacity: 1; }
+  }
+
+  .hero h1 {
+    font-size: 3rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, #e4e4ef 0%, #818cf8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    position: relative;
+    margin-bottom: 12px;
+  }
+
+  .hero .subtitle {
+    font-size: 1.2rem;
+    color: var(--text-dim);
+    max-width: 600px;
+    margin: 0 auto;
+    position: relative;
+  }
+
+  .hero .date {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-top: 16px;
+    position: relative;
+  }
+
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(10,10,15,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  nav .inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    gap: 4px;
+  }
+
+  nav button {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    padding: 14px 18px;
+    cursor: pointer;
+    font-size: 0.88rem;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  nav button:hover { color: var(--text); }
+  nav button.active { color: var(--accent2); border-bottom-color: var(--accent); }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }
+
+  section {
+    display: none;
+    animation: fadeIn 0.3s ease;
+  }
+
+  section.active { display: block; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  h2 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+
+  h3 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    margin: 32px 0 12px;
+    color: var(--accent2);
+  }
+
+  .section-desc {
+    color: var(--text-dim);
+    margin-bottom: 32px;
+    font-size: 0.95rem;
+  }
+
+  .grid { display: grid; gap: 20px; }
+  .grid-2 { grid-template-columns: 1fr 1fr; }
+  .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .grid-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+
+  @media (max-width: 900px) {
+    .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    .hero h1 { font-size: 2rem; }
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+  }
+
+  .card-header {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .card-value {
+    font-size: 2.2rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+
+  .card-sub {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  .green { color: var(--green); }
+  .red { color: var(--red); }
+  .amber { color: var(--amber); }
+  .cyan { color: var(--cyan); }
+  .accent { color: var(--accent2); }
+
+  .chart-container {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin: 20px 0;
+    position: relative;
+  }
+
+  .chart-container h4 {
+    font-size: 0.95rem;
+    margin-bottom: 16px;
+    color: var(--text);
+  }
+
+  .chart-wrap {
+    position: relative;
+    height: 340px;
+  }
+
+  .chart-wrap-sm { height: 280px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+  }
+
+  th {
+    text-align: left;
+    padding: 12px 16px;
+    background: var(--surface2);
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--border);
+  }
+
+  td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  tr:hover td { background: rgba(99,102,241,0.04); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .badge-green { background: rgba(34,197,94,0.12); color: var(--green); }
+  .badge-amber { background: rgba(245,158,11,0.12); color: var(--amber); }
+  .badge-red { background: rgba(239,68,68,0.12); color: var(--red); }
+  .badge-accent { background: rgba(99,102,241,0.12); color: var(--accent2); }
+
+  .callout {
+    background: rgba(99,102,241,0.06);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 24px 0;
+  }
+
+  .callout-title {
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--accent2);
+  }
+
+  .callout p { color: var(--text-dim); font-size: 0.9rem; }
+
+  .tier-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px 24px;
+    text-align: center;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+
+  .tier-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+
+  .tier-card.featured {
+    border-color: var(--accent);
+    background: linear-gradient(180deg, rgba(99,102,241,0.08) 0%, var(--surface) 100%);
+  }
+
+  .tier-name {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .tier-price {
+    font-size: 2.8rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+
+  .tier-price span {
+    font-size: 0.9rem;
+    font-weight: 400;
+    color: var(--text-dim);
+  }
+
+  .tier-features {
+    list-style: none;
+    margin-top: 20px;
+    text-align: left;
+  }
+
+  .tier-features li {
+    padding: 6px 0;
+    font-size: 0.88rem;
+    color: var(--text-dim);
+    border-bottom: 1px solid rgba(42,42,58,0.5);
+  }
+
+  .tier-features li::before {
+    content: '\2713';
+    color: var(--green);
+    margin-right: 8px;
+    font-weight: 700;
+  }
+
+  .margin-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 8px 0;
+  }
+
+  .margin-bar-label {
+    width: 160px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  .margin-bar-track {
+    flex: 1;
+    height: 28px;
+    background: var(--surface2);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .margin-bar-fill {
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 10px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #fff;
+    transition: width 1s ease;
+  }
+
+  .source-list {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+
+  .source-list h4 {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .source-list a {
+    display: block;
+    color: var(--accent2);
+    text-decoration: none;
+    font-size: 0.82rem;
+    padding: 3px 0;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+  }
+
+  .source-list a:hover { opacity: 1; }
+
+  .waterfall-row {
+    display: flex;
+    align-items: center;
+    margin: 6px 0;
+    gap: 12px;
+  }
+  .waterfall-label {
+    width: 180px;
+    text-align: right;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+  .waterfall-bar-area {
+    flex: 1;
+    position: relative;
+    height: 32px;
+  }
+  .waterfall-bar {
+    position: absolute;
+    height: 100%;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #fff;
+  }
+  .waterfall-val {
+    width: 80px;
+    text-align: right;
+    font-size: 0.88rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>Brick Studio Pricing Strategy</h1>
+  <p class="subtitle">Competitive analysis, cost modeling, and a recommended pricing framework targeting 80%+ gross margins</p>
+  <p class="date">Research compiled February 2026</p>
+</div>
+
+<nav>
+  <div class="inner">
+    <button class="active" onclick="showSection('exec')">Executive Summary</button>
+    <button onclick="showSection('landscape')">Competitive Landscape</button>
+    <button onclick="showSection('pricing')">Pricing Comparison</button>
+    <button onclick="showSection('costs')">Cost Structure</button>
+    <button onclick="showSection('margins')">Margin Analysis</button>
+    <button onclick="showSection('strategy')">Recommended Strategy</button>
+    <button onclick="showSection('sources')">Sources</button>
+  </div>
+</nav>
+
+<div class="container">
+
+<!-- ===== EXECUTIVE SUMMARY ===== -->
+<section id="exec" class="active">
+  <h2>Executive Summary</h2>
+  <p class="section-desc">The AI-powered app development market exceeded $7B in 2025 and is projected to reach $30B+ by 2032. The window to establish pricing power is now.</p>
+
+  <div class="grid grid-4" style="margin-bottom: 32px;">
+    <div class="card">
+      <div class="card-header">Market Size (2025)</div>
+      <div class="card-value">$7.4B</div>
+      <div class="card-sub green">+54.7% YoY</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Projected Market (2032)</div>
+      <div class="card-value">$30.1B</div>
+      <div class="card-sub">27.1% CAGR</div>
+    </div>
+    <div class="card">
+      <div class="card-header">VC into AI (2025)</div>
+      <div class="card-value">$202B</div>
+      <div class="card-sub green">+75% YoY</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Target Gross Margin</div>
+      <div class="card-value green">83%</div>
+      <div class="card-sub">Blended across all tiers</div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">The Core Insight</div>
+    <p>Pure AI companies average 50-60% gross margins due to inference costs. Traditional SaaS achieves 80-90%. The path to 80%+ is a <strong>hybrid model</strong> where AI generation is a high-value add-on to a high-margin platform fee &mdash; not the sole revenue stream. Brick Studio's architecture-first approach (BAC) is uniquely positioned for this because the platform intelligence lives in the contract layer, not just in LLM calls.</p>
+  </div>
+
+  <div class="chart-container">
+    <h4>Combined Startup Valuations in AI Dev Tools (2024 vs 2025)</h4>
+    <div class="chart-wrap chart-wrap-sm">
+      <canvas id="valuationChart"></canvas>
+    </div>
+  </div>
+
+  <h3>Key Findings</h3>
+  <div class="grid grid-2">
+    <div class="card">
+      <div class="card-header">Industry Standard Price Point</div>
+      <div class="card-value">$20<span style="font-size:1rem;color:var(--text-dim)">/mo</span></div>
+      <div class="card-sub">Bolt.new, Cursor, v0, Lovable all anchor here for individual plans</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Replit's Gross Margins</div>
+      <div class="card-value amber">20-36%</div>
+      <div class="card-sub">Dipped to -14% during usage surges. AI inference is the margin killer.</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Railway's Approach</div>
+      <div class="card-value green">Profitable</div>
+      <div class="card-sub">30 employees, $0 marketing, owns hardware. Excellent unit economics.</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Enterprise Margins</div>
+      <div class="card-value green">80-95%</div>
+      <div class="card-sub">SSO, SLA, compliance features cost near-zero to deliver</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== COMPETITIVE LANDSCAPE ===== -->
+<section id="landscape">
+  <h2>Competitive Landscape</h2>
+  <p class="section-desc">Funding, revenue, and market positioning of the major players in AI-powered development.</p>
+
+  <div class="chart-container">
+    <h4>Annual Recurring Revenue (ARR) Comparison &mdash; Latest Reported</h4>
+    <div class="chart-wrap">
+      <canvas id="arrChart"></canvas>
+    </div>
+  </div>
+
+  <div class="chart-container">
+    <h4>Latest Valuations ($B)</h4>
+    <div class="chart-wrap">
+      <canvas id="valChart"></canvas>
+    </div>
+  </div>
+
+  <h3>Competitor Profiles</h3>
+  <div class="card" style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Company</th>
+          <th>Category</th>
+          <th>ARR</th>
+          <th>Valuation</th>
+          <th>Users</th>
+          <th>Employees</th>
+          <th>Founded</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Cursor</strong></td><td>AI-native IDE</td><td>$1B+</td><td>$29.3B</td><td>20M+</td><td>~50</td><td>2022</td></tr>
+        <tr><td><strong>Replit</strong></td><td>Browser IDE + Agent</td><td>$253M</td><td>$9B</td><td>40M+</td><td>~200</td><td>2016</td></tr>
+        <tr><td><strong>Vercel / v0</strong></td><td>Frontend platform + AI</td><td>$200M</td><td>$9.3B</td><td>3.5M+</td><td>~400</td><td>2015</td></tr>
+        <tr><td><strong>Lovable</strong></td><td>AI app builder</td><td>$200M</td><td>$6.6B</td><td>8M</td><td>~517</td><td>2023</td></tr>
+        <tr><td><strong>Windsurf</strong></td><td>AI IDE (Cognition)</td><td>$82M</td><td>$10.2B*</td><td>--</td><td>350+ ent.</td><td>2019</td></tr>
+        <tr><td><strong>Bolt.new</strong></td><td>AI app builder</td><td>$40M</td><td>$700M</td><td>5M</td><td>~35</td><td>2024</td></tr>
+        <tr><td><strong>Railway</strong></td><td>PaaS / Deploy</td><td>~$20M est.</td><td>--</td><td>2M+</td><td>30</td><td>2020</td></tr>
+        <tr><td><strong>GitHub Copilot</strong></td><td>AI assistant</td><td>--</td><td>Part of MSFT</td><td>20M+</td><td>Part of GH</td><td>2021</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout" style="margin-top: 24px;">
+    <div class="callout-title">Where Brick Studio Fits</div>
+    <p>Brick Studio occupies a unique position: <strong>architecture-first AI app generation + integrated deployment</strong>. Unlike Cursor/Copilot (IDE-only, no deploy), Bolt/Lovable (prompt-only, no architecture model), or Railway (deploy-only, no generation), Brick combines a structured BAC (Brick App Contract) with AI generation and deployment in one flow. This is the full-stack value proposition that supports premium pricing.</p>
+  </div>
+
+  <div class="chart-container">
+    <h4>Revenue Growth Trajectories (Months to $100M ARR)</h4>
+    <div class="chart-wrap chart-wrap-sm">
+      <canvas id="growthChart"></canvas>
+    </div>
+  </div>
+</section>
+
+<!-- ===== PRICING COMPARISON ===== -->
+<section id="pricing">
+  <h2>Pricing Comparison</h2>
+  <p class="section-desc">How competitors price their products across tiers, and what the market will bear.</p>
+
+  <div class="chart-container">
+    <h4>Individual Plan Pricing ($/month)</h4>
+    <div class="chart-wrap chart-wrap-sm">
+      <canvas id="pricingChart"></canvas>
+    </div>
+  </div>
+
+  <h3>Detailed Pricing Matrix</h3>
+  <div class="card" style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Platform</th>
+          <th>Free</th>
+          <th>Pro / Individual</th>
+          <th>Team</th>
+          <th>Enterprise</th>
+          <th>Model</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Replit</strong></td>
+          <td>Limited trial</td>
+          <td>$20/mo + $25 credits</td>
+          <td>$100/mo (up to 15)</td>
+          <td>Custom</td>
+          <td>Sub + credits + usage</td>
+        </tr>
+        <tr>
+          <td><strong>Railway</strong></td>
+          <td>$5 trial credit</td>
+          <td>$5/mo + usage</td>
+          <td>$20/mo + usage</td>
+          <td>~$1,000+/mo</td>
+          <td>Sub + pure usage</td>
+        </tr>
+        <tr>
+          <td><strong>Bolt.new</strong></td>
+          <td>1M tokens/mo</td>
+          <td>$20/mo (10M tokens)</td>
+          <td>$40/user/mo</td>
+          <td>--</td>
+          <td>Sub + tokens</td>
+        </tr>
+        <tr>
+          <td><strong>v0.dev</strong></td>
+          <td>$5 credits/mo</td>
+          <td>$20/mo ($20 credits)</td>
+          <td>$30/user/mo</td>
+          <td>Custom</td>
+          <td>Sub + credits</td>
+        </tr>
+        <tr>
+          <td><strong>Lovable</strong></td>
+          <td>5 daily credits</td>
+          <td>$25/mo (100 credits)</td>
+          <td>$50/mo</td>
+          <td>Custom</td>
+          <td>Sub + credits</td>
+        </tr>
+        <tr>
+          <td><strong>Cursor</strong></td>
+          <td>50 premium req</td>
+          <td>$20/mo ($20 credits)</td>
+          <td>$40/user/mo</td>
+          <td>Custom</td>
+          <td>Sub + credit pool</td>
+        </tr>
+        <tr>
+          <td><strong>Copilot</strong></td>
+          <td>50 premium req</td>
+          <td>$10/mo</td>
+          <td>$19/user/mo</td>
+          <td>$39/user/mo</td>
+          <td>Sub + request limits</td>
+        </tr>
+        <tr>
+          <td><strong>Windsurf</strong></td>
+          <td>25 credits/mo</td>
+          <td>$15/mo</td>
+          <td>$30/user/mo</td>
+          <td>$60/user/mo</td>
+          <td>Sub + credits</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">Market Convergence: The $20/month Anchor</div>
+    <p>Six of eight major platforms price their individual plan at $20-25/month. GitHub Copilot at $10 and Windsurf at $15 are the outliers &mdash; both subsidized by massive parent companies (Microsoft and Cognition/Google). Brick Studio should price at <strong>$29/month</strong> for Pro: above the cluster to signal premium value (architecture-first differentiation), but below the pain threshold for individual developers.</p>
+  </div>
+
+  <div class="chart-container">
+    <h4>Team/Business Plan Pricing ($/user/month)</h4>
+    <div class="chart-wrap chart-wrap-sm">
+      <canvas id="teamPricingChart"></canvas>
+    </div>
+  </div>
+</section>
+
+<!-- ===== COST STRUCTURE ===== -->
+<section id="costs">
+  <h2>Cost Structure Analysis</h2>
+  <p class="section-desc">Understanding the actual cost to serve each user is the foundation for margin-positive pricing.</p>
+
+  <div class="grid grid-3" style="margin-bottom: 24px;">
+    <div class="card">
+      <div class="card-header">LLM Cost per Generation</div>
+      <div class="card-value green">$0.09</div>
+      <div class="card-sub">Blended (70% Haiku, 30% Sonnet) with caching</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Infra Cost per User/mo</div>
+      <div class="card-value green">$3.10</div>
+      <div class="card-sub">Multi-tenant compute + storage + DB</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Total COGS per User/mo</div>
+      <div class="card-value accent">$4.88</div>
+      <div class="card-sub">At 20 generations/month average</div>
+    </div>
+  </div>
+
+  <div class="chart-container">
+    <h4>LLM API Cost Comparison (per 1M output tokens)</h4>
+    <div class="chart-wrap chart-wrap-sm">
+      <canvas id="llmCostChart"></canvas>
+    </div>
+  </div>
+
+  <h3>Cost Breakdown per User per Month</h3>
+  <div class="chart-container">
+    <h4>COGS Waterfall &mdash; What It Costs to Serve One User</h4>
+    <div style="padding: 20px 0;">
+      <div class="waterfall-row">
+        <div class="waterfall-label">Haiku generations (14x)</div>
+        <div class="waterfall-bar-area"><div class="waterfall-bar" style="width:19.5%;background:var(--accent);left:0;">$0.95</div></div>
+        <div class="waterfall-val">$0.95</div>
+      </div>
+      <div class="waterfall-row">
+        <div class="waterfall-label">Sonnet generations (6x)</div>
+        <div class="waterfall-bar-area"><div class="waterfall-bar" style="width:25%;background:var(--accent2);left:0;">$1.22</div></div>
+        <div class="waterfall-val">$1.22</div>
+      </div>
+      <div class="waterfall-row">
+        <div class="waterfall-label">Cache savings</div>
+        <div class="waterfall-bar-area"><div class="waterfall-bar" style="width:8%;background:var(--green);left:0;">-$0.39</div></div>
+        <div class="waterfall-val green">-$0.39</div>
+      </div>
+      <div class="waterfall-row">
+        <div class="waterfall-label">Compute (container)</div>
+        <div class="waterfall-bar-area"><div class="waterfall-bar" style="width:30.7%;background:#f97316;left:0;">$1.50</div></div>
+        <div class="waterfall-val">$1.50</div>
+      </div>
+      <div class="waterfall-row">
+        <div class="waterfall-label">Database (Postgres)</div>
+        <div class="waterfall-bar-area"><div class="waterfall-bar" style="width:20.5%;background:#f97316;left:0;">$1.00</div></div>
+        <div class="waterfall-val">$1.00</div>
+      </div>
+      <div class="waterfall-row">
+        <div class="waterfall-label">Storage + CDN + misc</div>
+        <div class="waterfall-bar-area"><div class="waterfall-bar" style="width:12.3%;background:#f97316;left:0;">$0.60</div></div>
+        <div class="waterfall-val">$0.60</div>
+      </div>
+      <div class="waterfall-row" style="border-top: 2px solid var(--border); padding-top: 12px; margin-top: 8px;">
+        <div class="waterfall-label" style="font-weight:700;color:var(--text);">Total COGS</div>
+        <div class="waterfall-bar-area"><div class="waterfall-bar" style="width:100%;background:linear-gradient(90deg,var(--accent),#f97316);left:0;">$4.88/user/mo</div></div>
+        <div class="waterfall-val" style="font-weight:700;color:var(--text);">$4.88</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>PaaS Markup Benchmarks</h3>
+  <div class="card" style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr><th>Platform</th><th>Underlying Cost</th><th>Customer Pays</th><th>Markup</th><th>Gross Margin</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Heroku (1x dyno)</td><td>~$3-5/mo</td><td>$25/mo</td><td>5-8x</td><td><span class="badge badge-green">80-83%</span></td></tr>
+        <tr><td>Render (1 CPU/2GB)</td><td>~$5-8/mo</td><td>$25/mo</td><td>3-5x</td><td><span class="badge badge-green">68-80%</span></td></tr>
+        <tr><td>Railway (1 vCPU/2GB)</td><td>~$5-8/mo</td><td>$40/mo</td><td>5-8x</td><td><span class="badge badge-green">80-87%</span></td></tr>
+        <tr><td>Fly.io (small VM)</td><td>~$2-4/mo</td><td>$3.15/mo</td><td>1.5-2x</td><td><span class="badge badge-amber">33-50%</span></td></tr>
+        <tr><td><strong>Brick (target)</strong></td><td><strong>~$4.88/mo</strong></td><td><strong>$29/mo</strong></td><td><strong>5.9x</strong></td><td><span class="badge badge-green"><strong>83%</strong></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Key Cost Optimization Levers</h3>
+  <div class="grid grid-2">
+    <div class="card">
+      <div class="card-header">Model Routing</div>
+      <div class="card-value green">60-70%</div>
+      <div class="card-sub">LLM savings by using Haiku ($1/$5/M tokens) for 70%+ of tasks instead of Sonnet ($3/$15/M)</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Prompt Caching</div>
+      <div class="card-value green">90%</div>
+      <div class="card-sub">Input token savings on cache hits. System prompts and BAC context are highly cacheable.</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Reserved Instances</div>
+      <div class="card-value green">40-72%</div>
+      <div class="card-sub">Compute savings with 1-3 year commitments. Charge users on-demand rates.</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Multi-tenancy</div>
+      <div class="card-value green">5-10x</div>
+      <div class="card-sub">Higher density: 50-200+ tenants per node vs single-tenant VMs</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== MARGIN ANALYSIS ===== -->
+<section id="margins">
+  <h2>Margin Analysis</h2>
+  <p class="section-desc">Modeling gross margins across tiers and revenue streams to achieve the 80%+ target.</p>
+
+  <div class="chart-container">
+    <h4>Gross Margin by Revenue Stream</h4>
+    <div style="padding: 20px 0;">
+      <div class="margin-bar">
+        <div class="margin-bar-label">Platform subscription</div>
+        <div class="margin-bar-track"><div class="margin-bar-fill" style="width:92%;background:linear-gradient(90deg,var(--accent),var(--green));">92%</div></div>
+      </div>
+      <div class="margin-bar">
+        <div class="margin-bar-label">Enterprise add-ons</div>
+        <div class="margin-bar-track"><div class="margin-bar-fill" style="width:95%;background:linear-gradient(90deg,var(--accent),var(--green));">95%</div></div>
+      </div>
+      <div class="margin-bar">
+        <div class="margin-bar-label">Hosting / deploy</div>
+        <div class="margin-bar-track"><div class="margin-bar-fill" style="width:79%;background:linear-gradient(90deg,var(--accent),var(--green));">79%</div></div>
+      </div>
+      <div class="margin-bar">
+        <div class="margin-bar-label">AI generation credits</div>
+        <div class="margin-bar-track"><div class="margin-bar-fill" style="width:68%;background:linear-gradient(90deg,var(--amber),var(--accent));">68%</div></div>
+      </div>
+      <div class="margin-bar" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+        <div class="margin-bar-label" style="font-weight:700;color:var(--text);">Blended target</div>
+        <div class="margin-bar-track"><div class="margin-bar-fill" style="width:83%;background:linear-gradient(90deg,var(--green),var(--cyan));">83%</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="chart-container">
+    <h4>Revenue Mix for 83% Blended Margin</h4>
+    <div class="chart-wrap chart-wrap-sm">
+      <canvas id="revMixChart"></canvas>
+    </div>
+  </div>
+
+  <h3>Margin Comparison vs. Competitors</h3>
+  <div class="chart-container">
+    <h4>Reported / Estimated Gross Margins</h4>
+    <div class="chart-wrap chart-wrap-sm">
+      <canvas id="marginCompChart"></canvas>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">Why Replit's Margins Are Low (and How to Avoid Their Mistakes)</div>
+    <p>Replit's gross margins fluctuated between -14% and 36% because: (1) Agent 3 spawns sub-agents that multiply inference costs unpredictably, (2) they don't do model routing &mdash; expensive models for every task, (3) credit amounts were raised without price increases to match. Brick Studio avoids this by using the BAC as a structured context layer that <strong>reduces</strong> the LLM's burden &mdash; the architecture contract provides deterministic scaffolding, so the LLM fills in gaps rather than generating everything from scratch. This means fewer tokens per generation and smarter model routing.</p>
+  </div>
+
+  <h3>Scenario Analysis: Margin at Different Price Points</h3>
+  <div class="card" style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr><th>Pro Price</th><th>COGS/User</th><th>Gross Profit</th><th>Gross Margin</th><th>Verdict</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>$15/mo</td><td>$4.88</td><td>$10.12</td><td>67.5%</td><td><span class="badge badge-red">Below target</span></td></tr>
+        <tr><td>$20/mo</td><td>$4.88</td><td>$15.12</td><td>75.6%</td><td><span class="badge badge-amber">Close</span></td></tr>
+        <tr><td><strong>$29/mo</strong></td><td><strong>$4.88</strong></td><td><strong>$24.12</strong></td><td><strong>83.2%</strong></td><td><span class="badge badge-green">Target met</span></td></tr>
+        <tr><td>$39/mo</td><td>$4.88</td><td>$34.12</td><td>87.5%</td><td><span class="badge badge-green">Exceeds target</span></td></tr>
+        <tr><td>$49/mo</td><td>$4.88</td><td>$44.12</td><td>90.0%</td><td><span class="badge badge-green">Premium tier</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===== RECOMMENDED STRATEGY ===== -->
+<section id="strategy">
+  <h2>Recommended Pricing Strategy</h2>
+  <p class="section-desc">A multi-dimensional pricing model designed for 83% blended gross margin, competitive positioning, and expansion revenue.</p>
+
+  <h3>Proposed Tier Structure</h3>
+  <div class="grid grid-4" style="margin-bottom: 32px;">
+    <div class="tier-card">
+      <div class="tier-name">Starter</div>
+      <div class="tier-price">$0<span>/mo</span></div>
+      <ul class="tier-features">
+        <li>3 projects (public)</li>
+        <li>50 AI generations/month</li>
+        <li>Preview deployments only</li>
+        <li>Community support</li>
+        <li>Non-commercial use</li>
+      </ul>
+    </div>
+    <div class="tier-card featured">
+      <div class="tier-name">Pro</div>
+      <div class="tier-price">$29<span>/mo</span></div>
+      <ul class="tier-features">
+        <li>Unlimited private projects</li>
+        <li>500 AI generations/month</li>
+        <li>Production deployments</li>
+        <li>Custom domains</li>
+        <li>Managed Postgres DB</li>
+        <li>10 GB storage, 100 GB egress</li>
+      </ul>
+    </div>
+    <div class="tier-card">
+      <div class="tier-name">Team</div>
+      <div class="tier-price">$49<span>/user/mo</span></div>
+      <ul class="tier-features">
+        <li>Everything in Pro</li>
+        <li>Shared project workspaces</li>
+        <li>Pooled generation credits</li>
+        <li>Role-based access control</li>
+        <li>Priority support</li>
+        <li>Team analytics</li>
+      </ul>
+    </div>
+    <div class="tier-card">
+      <div class="tier-name">Enterprise</div>
+      <div class="tier-price">Custom</div>
+      <ul class="tier-features">
+        <li>SSO / SAML / SCIM</li>
+        <li>99.9% SLA</li>
+        <li>Dedicated infrastructure</li>
+        <li>SOC 2 compliance</li>
+        <li>Unlimited generations</li>
+        <li>Dedicated support</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Pricing Model Architecture</h3>
+  <div class="chart-container">
+    <h4>Three Revenue Dimensions</h4>
+    <div class="chart-wrap chart-wrap-sm">
+      <canvas id="dimensionChart"></canvas>
+    </div>
+  </div>
+
+  <div class="grid grid-3">
+    <div class="card">
+      <div class="card-header">1. Platform Subscription</div>
+      <div class="card-value">$29-49</div>
+      <div class="card-sub">Fixed monthly fee. Covers access to the platform, BAC editor, project management. <strong>92% margin</strong>. This is your revenue floor.</div>
+    </div>
+    <div class="card">
+      <div class="card-header">2. AI Generation Credits</div>
+      <div class="card-value">$0.05-0.50</div>
+      <div class="card-sub">Per generation, metered by complexity. Included credits in subscription; overages billed. <strong>68% margin</strong>. This is your expansion engine.</div>
+    </div>
+    <div class="card">
+      <div class="card-header">3. Hosting + Deploy</div>
+      <div class="card-value">Usage</div>
+      <div class="card-sub">Compute, storage, egress billed at PaaS rates with reserved-instance arbitrage. <strong>79% margin</strong>. This is your retention moat.</div>
+    </div>
+  </div>
+
+  <h3>Why $29/month (Not $20)</h3>
+  <div class="callout">
+    <div class="callout-title">Price Above the Cluster</div>
+    <p>At $20/month, you're in a price war with Bolt.new, Cursor, and v0 &mdash; all backed by $200M-$2B+ in funding. At $29/month, you signal that Brick Studio delivers more value (architecture-first design + generation + deployment in one), while remaining accessible. The math: $29 yields 83% margin vs. 76% at $20, and the $9 difference is trivial relative to the value delivered (a full working app that would cost $3,000-12,000 to build manually).</p>
+  </div>
+
+  <h3>Usage Pricing Schedule</h3>
+  <div class="card" style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr><th>Resource</th><th>Included (Pro)</th><th>Overage Rate</th><th>Your Cost</th><th>Margin</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>AI Generations</td><td>500/month</td><td>$0.10-0.50/gen</td><td>$0.02-0.09/gen</td><td><span class="badge badge-green">68-82%</span></td></tr>
+        <tr><td>Compute</td><td>Basic included</td><td>$0.05/vCPU-hr</td><td>$0.01/vCPU-hr</td><td><span class="badge badge-green">80%</span></td></tr>
+        <tr><td>Storage</td><td>10 GB</td><td>$0.25/GB/mo</td><td>$0.023/GB/mo</td><td><span class="badge badge-green">91%</span></td></tr>
+        <tr><td>Egress</td><td>100 GB</td><td>$0.10/GB</td><td>$0.01/GB</td><td><span class="badge badge-green">90%</span></td></tr>
+        <tr><td>Database</td><td>1 instance</td><td>$7/mo per instance</td><td>$1-2/mo</td><td><span class="badge badge-green">71-86%</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Value-Based Pricing Rationale</h3>
+  <div class="chart-container">
+    <h4>Customer ROI: What They Pay vs. What They Save</h4>
+    <div class="chart-wrap">
+      <canvas id="roiChart"></canvas>
+    </div>
+  </div>
+
+  <h3>Growth Levers</h3>
+  <div class="grid grid-2">
+    <div class="card">
+      <div class="card-header">Net Dollar Retention Target</div>
+      <div class="card-value green">125%+</div>
+      <div class="card-sub">Usage-based companies are 23% more likely to achieve 120%+ NDR. Organic expansion through more generations, more projects, more hosting.</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Freemium Conversion Target</div>
+      <div class="card-value accent">8-12%</div>
+      <div class="card-sub">Industry average for dev tools is 2-5%. Non-commercial use restriction (Vercel model) drives higher conversion by gating real projects.</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Enterprise ACV Target</div>
+      <div class="card-value">$25K+<span style="font-size:1rem;color:var(--text-dim)">/yr</span></div>
+      <div class="card-sub">Minimum floor to signal enterprise-grade quality. SSO, SLA, compliance features cost near-zero to serve = 95% margin.</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Pricing Review Cadence</div>
+      <div class="card-value accent">Quarterly</div>
+      <div class="card-sub">Companies that regularly optimize pricing see 30% higher growth rates (OpenView).</div>
+    </div>
+  </div>
+
+  <h3>Strategic Positioning Summary</h3>
+  <div class="callout">
+    <div class="callout-title">The Brick Studio Moat</div>
+    <p><strong>"Open code, sticky workflow."</strong> Generate standard React/Next.js/standard frameworks &mdash; developers feel safe choosing you because there's no proprietary lock-in at the code level. But CI/CD pipelines, custom domains, environment configs, deployment history, team permissions, and the BAC architecture model all create organic switching costs at the workflow level. Once a team's projects live on Brick Studio, migration is painful even though technically possible. This is exactly how Vercel built a $9.3B business on open-source Next.js.</p>
+  </div>
+</section>
+
+<!-- ===== SOURCES ===== -->
+<section id="sources">
+  <h2>Sources</h2>
+  <p class="section-desc">All research backing this report, organized by category.</p>
+
+  <h3>Replit</h3>
+  <div class="source-list" style="border-top:none;margin-top:0;padding-top:0;">
+    <a href="https://replit.com/pricing" target="_blank">Replit Pricing Page</a>
+    <a href="https://blog.replit.com/pro-plan" target="_blank">Replit Blog: Pro Plan Announcement</a>
+    <a href="https://blog.replit.com/effort-based-pricing" target="_blank">Replit Blog: Effort-Based Pricing</a>
+    <a href="https://sacra.com/research/replit-at-253m-arr-growing-2352-yoy/" target="_blank">Sacra: Replit at $253M ARR</a>
+    <a href="https://techcrunch.com/2025/09/10/replit-hits-3b-valuation-on-150m-annualized-revenue/" target="_blank">TechCrunch: Replit Hits $3B Valuation</a>
+    <a href="https://techcrunch.com/2025/08/07/the-high-costs-and-thin-margins-threatening-ai-coding-startups/" target="_blank">TechCrunch: High Costs and Thin Margins Threatening AI Coding Startups</a>
+    <a href="https://www.theregister.com/2025/09/18/replit_agent3_pricing/" target="_blank">The Register: Replit Cost Overruns</a>
+    <a href="https://techfundingnews.com/replit-grabs-400m-at-9b-valuation-in-the-ai-coding-race-with-openai-and-cursor/" target="_blank">Replit $400M at $9B Valuation</a>
+  </div>
+
+  <h3>Railway</h3>
+  <div class="source-list" style="border-top:none;margin-top:0;padding-top:0;">
+    <a href="https://railway.com/pricing" target="_blank">Railway Pricing Page</a>
+    <a href="https://blog.railway.com/p/series-b" target="_blank">Railway Series B ($100M) Announcement</a>
+    <a href="https://blog.railway.com/p/data-center-build-part-one" target="_blank">Railway: Building Our Own Data Center</a>
+    <a href="https://venturebeat.com/infrastructure/railway-secures-usd100-million-to-challenge-aws-with-ai-native-cloud" target="_blank">VentureBeat: Railway $100M to Challenge AWS</a>
+    <a href="https://research.contrary.com/company/railway" target="_blank">Contrary Research: Railway Company Profile</a>
+    <a href="https://blog.railway.com/p/scale-not-sales" target="_blank">Railway Blog: Scale Not Sales</a>
+  </div>
+
+  <h3>AI App Builders</h3>
+  <div class="source-list" style="border-top:none;margin-top:0;padding-top:0;">
+    <a href="https://bolt.new/pricing" target="_blank">Bolt.new Pricing</a>
+    <a href="https://sacra.com/research/bolt-new-at-40m-arr/" target="_blank">Sacra: Bolt.new at $40M ARR</a>
+    <a href="https://v0.app/pricing" target="_blank">v0.dev Pricing</a>
+    <a href="https://vercel.com/blog/updated-v0-pricing" target="_blank">Vercel Blog: Updated v0 Pricing</a>
+    <a href="https://www.websitebuilderexpert.com/vibe-coding/lovable-pricing/" target="_blank">Lovable Pricing Breakdown</a>
+    <a href="https://techcrunch.com/2025/12/18/vibe-coding-startup-lovable-raises-330m-at-a-6-6b-valuation/" target="_blank">TechCrunch: Lovable $330M at $6.6B</a>
+    <a href="https://ainativedev.io/news/cursor-new-pricing-structure-explained" target="_blank">Cursor Pricing Explained</a>
+    <a href="https://www.cnbc.com/2025/11/13/cursor-ai-startup-funding-round-valuation.html" target="_blank">CNBC: Cursor $29.3B Valuation</a>
+    <a href="https://github.com/features/copilot/plans" target="_blank">GitHub Copilot Plans</a>
+    <a href="https://windsurf.com/pricing" target="_blank">Windsurf Pricing</a>
+  </div>
+
+  <h3>Infrastructure & Costs</h3>
+  <div class="source-list" style="border-top:none;margin-top:0;padding-top:0;">
+    <a href="https://aws.amazon.com/ec2/pricing/on-demand/" target="_blank">AWS EC2 On-Demand Pricing</a>
+    <a href="https://aws.amazon.com/fargate/pricing/" target="_blank">AWS Fargate Pricing</a>
+    <a href="https://cloud.google.com/run/pricing" target="_blank">Google Cloud Run Pricing</a>
+    <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank">Claude API Pricing</a>
+    <a href="https://openai.com/api/pricing/" target="_blank">OpenAI API Pricing</a>
+    <a href="https://aws.amazon.com/s3/pricing/" target="_blank">AWS S3 Pricing</a>
+    <a href="https://www.cloudzero.com/blog/saas-gross-margin-benchmarks/" target="_blank">CloudZero: SaaS Gross Margin Benchmarks</a>
+  </div>
+
+  <h3>Pricing Strategy</h3>
+  <div class="source-list" style="border-top:none;margin-top:0;padding-top:0;">
+    <a href="https://firstpagesage.com/seo-blog/saas-freemium-conversion-rates/" target="_blank">SaaS Freemium Conversion Rates</a>
+    <a href="https://openviewpartners.com/2023-saas-benchmarks-report/" target="_blank">OpenView: SaaS Benchmarks Report</a>
+    <a href="https://www.bvp.com/atlas/the-ai-pricing-and-monetization-playbook" target="_blank">Bessemer: AI Pricing Playbook</a>
+    <a href="https://www.cobloom.com/blog/saas-pricing-models" target="_blank">CoBLoom: SaaS Pricing Models Guide</a>
+    <a href="https://zencoder.ai/blog/roi-of-ai-code-generation-in-2025-metrics-budgets-and-time-saved" target="_blank">Zencoder: ROI of AI Code Generation</a>
+    <a href="https://getdx.com/blog/ai-coding-assistant-pricing/" target="_blank">DX: AI Coding Assistant Pricing Comparison</a>
+    <a href="https://www.macrotrends.net/stocks/charts/DDOG/datadog/gross-margin" target="_blank">Datadog Gross Margin (80.76%)</a>
+  </div>
+</section>
+
+</div>
+
+<script>
+// Navigation
+function showSection(id) {
+  document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+  window.scrollTo({ top: 200, behavior: 'smooth' });
+}
+
+// Chart defaults
+Chart.defaults.color = '#8888a0';
+Chart.defaults.borderColor = 'rgba(42,42,58,0.6)';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+
+const accentColor = '#6366f1';
+const accent2 = '#818cf8';
+const greenColor = '#22c55e';
+const amberColor = '#f59e0b';
+const redColor = '#ef4444';
+const cyanColor = '#06b6d4';
+
+// Valuation chart
+new Chart(document.getElementById('valuationChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Cursor', 'Cognition/Windsurf', 'Vercel', 'Replit', 'Lovable', 'Bolt.new'],
+    datasets: [
+      { label: 'Mid-2024', data: [0.4, 2, 3.2, 1.2, 0, 0], backgroundColor: 'rgba(99,102,241,0.3)', borderColor: accentColor, borderWidth: 1 },
+      { label: 'Late 2025', data: [29.3, 10.2, 9.3, 9, 6.6, 0.7], backgroundColor: accentColor, borderColor: accent2, borderWidth: 1 }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { position: 'top' } },
+    scales: { y: { title: { display: true, text: 'Valuation ($B)' }, beginAtZero: true } }
+  }
+});
+
+// ARR chart
+new Chart(document.getElementById('arrChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Cursor', 'Replit', 'Lovable', 'Vercel', 'Windsurf', 'Bolt.new', 'Railway'],
+    datasets: [{
+      label: 'ARR ($M)',
+      data: [1000, 253, 200, 200, 82, 40, 20],
+      backgroundColor: [accentColor, '#a855f7', '#ec4899', '#f97316', cyanColor, amberColor, greenColor],
+      borderWidth: 0,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { x: { title: { display: true, text: 'Annual Recurring Revenue ($M)' }, beginAtZero: true } }
+  }
+});
+
+// Valuation comparison
+new Chart(document.getElementById('valChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Cursor', 'Cognition', 'Vercel', 'Replit', 'Lovable', 'Bolt.new'],
+    datasets: [{
+      label: 'Valuation ($B)',
+      data: [29.3, 10.2, 9.3, 9.0, 6.6, 0.7],
+      backgroundColor: [accentColor, '#a855f7', '#f97316', '#ec4899', cyanColor, amberColor],
+      borderWidth: 0,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { x: { title: { display: true, text: 'Valuation ($B)' }, beginAtZero: true } }
+  }
+});
+
+// Growth chart
+new Chart(document.getElementById('growthChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Lovable', 'Bolt.new', 'Cursor', 'Replit'],
+    datasets: [{
+      label: 'Months to $100M ARR',
+      data: [8, 12, 13, 11],
+      backgroundColor: [cyanColor, amberColor, accentColor, '#a855f7'],
+      borderWidth: 0,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { title: { display: true, text: 'Months' }, beginAtZero: true } }
+  }
+});
+
+// Individual pricing chart
+new Chart(document.getElementById('pricingChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Copilot', 'Windsurf', 'Bolt.new', 'Cursor', 'v0.dev', 'Replit', 'Lovable', 'Brick (rec.)'],
+    datasets: [{
+      label: '$/month',
+      data: [10, 15, 20, 20, 20, 20, 25, 29],
+      backgroundColor: ['#888', '#888', '#888', '#888', '#888', '#888', '#888', accentColor],
+      borderWidth: 0,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { title: { display: true, text: '$/month' }, beginAtZero: true, max: 35 } }
+  }
+});
+
+// Team pricing chart
+new Chart(document.getElementById('teamPricingChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Copilot Biz', 'v0 Team', 'Windsurf Team', 'Copilot Ent.', 'Cursor Team', 'Bolt Team', 'Brick Team (rec.)'],
+    datasets: [{
+      label: '$/user/month',
+      data: [19, 30, 30, 39, 40, 40, 49],
+      backgroundColor: ['#888', '#888', '#888', '#888', '#888', '#888', accentColor],
+      borderWidth: 0,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { title: { display: true, text: '$/user/month' }, beginAtZero: true, max: 60 } }
+  }
+});
+
+// LLM cost chart
+new Chart(document.getElementById('llmCostChart'), {
+  type: 'bar',
+  data: {
+    labels: ['GPT-4o-mini', 'Claude Haiku 4.5', 'GPT-4o', 'Claude Sonnet 4.5', 'Claude Opus 4.5'],
+    datasets: [{
+      label: '$/1M output tokens',
+      data: [0.60, 5, 10, 15, 25],
+      backgroundColor: [greenColor, greenColor, amberColor, amberColor, redColor],
+      borderWidth: 0,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { title: { display: true, text: '$/1M output tokens' }, beginAtZero: true } }
+  }
+});
+
+// Revenue mix chart
+new Chart(document.getElementById('revMixChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Platform Subscription (92% margin)', 'AI Generation Credits (68% margin)', 'Hosting/Deploy (79% margin)', 'Enterprise Add-ons (95% margin)'],
+    datasets: [{
+      data: [45, 25, 20, 10],
+      backgroundColor: [accentColor, amberColor, '#f97316', greenColor],
+      borderColor: '#12121a',
+      borderWidth: 3,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { position: 'right', labels: { padding: 16, font: { size: 12 } } },
+      tooltip: { callbacks: { label: ctx => `${ctx.label}: ${ctx.parsed}% of revenue` } }
+    }
+  }
+});
+
+// Margin comparison chart
+new Chart(document.getElementById('marginCompChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Replit (AI-heavy)', 'Fly.io (low markup)', 'Railway (own HW)', 'Render', 'Heroku (legacy)', 'Brick Studio (target)', 'SaaS Benchmark'],
+    datasets: [{
+      label: 'Gross Margin %',
+      data: [28, 40, 65, 72, 78, 83, 82],
+      backgroundColor: [redColor, amberColor, amberColor, greenColor, greenColor, accentColor, '#555'],
+      borderWidth: 0,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      annotation: {
+        annotations: { line: { type: 'line', yMin: 80, yMax: 80, borderColor: greenColor, borderDash: [6, 4], borderWidth: 2, label: { display: true, content: '80% target', position: 'end' } } }
+      }
+    },
+    scales: { y: { title: { display: true, text: 'Gross Margin %' }, beginAtZero: true, max: 100 } }
+  }
+});
+
+// Dimension chart
+new Chart(document.getElementById('dimensionChart'), {
+  type: 'radar',
+  data: {
+    labels: ['Revenue Predictability', 'Expansion Revenue', 'Customer Flexibility', 'Margin Control', 'Lock-in / Retention', 'Ease of Adoption'],
+    datasets: [
+      {
+        label: 'Pure Subscription',
+        data: [95, 20, 30, 85, 60, 90],
+        borderColor: '#888',
+        backgroundColor: 'rgba(136,136,136,0.1)',
+        pointBackgroundColor: '#888',
+      },
+      {
+        label: 'Pure Usage-Based',
+        data: [30, 90, 95, 40, 80, 50],
+        borderColor: amberColor,
+        backgroundColor: 'rgba(245,158,11,0.1)',
+        pointBackgroundColor: amberColor,
+      },
+      {
+        label: 'Hybrid (Recommended)',
+        data: [80, 85, 80, 75, 85, 80],
+        borderColor: accentColor,
+        backgroundColor: 'rgba(99,102,241,0.15)',
+        pointBackgroundColor: accentColor,
+        borderWidth: 3,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: { r: { beginAtZero: true, max: 100, ticks: { display: false }, grid: { color: 'rgba(42,42,58,0.6)' }, pointLabels: { font: { size: 11 } } } }
+  }
+});
+
+// ROI chart
+new Chart(document.getElementById('roiChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Single Component', 'Full Page/Feature', 'MVP Application', 'App + Deployment'],
+    datasets: [
+      {
+        label: 'Brick Studio Cost',
+        data: [0.10, 0.50, 5, 10],
+        backgroundColor: greenColor,
+        borderWidth: 0,
+        borderRadius: 6,
+      },
+      {
+        label: 'Customer Pays (credits)',
+        data: [2, 10, 50, 100],
+        backgroundColor: accentColor,
+        borderWidth: 0,
+        borderRadius: 6,
+      },
+      {
+        label: 'Manual Dev Cost (saved)',
+        data: [225, 900, 4500, 9000],
+        backgroundColor: 'rgba(136,136,136,0.3)',
+        borderColor: '#888',
+        borderWidth: 1,
+        borderRadius: 6,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { position: 'top' } },
+    scales: {
+      y: {
+        type: 'logarithmic',
+        title: { display: true, text: 'Cost ($) — log scale' },
+        ticks: { callback: v => '$' + v }
+      }
+    }
+  }
+});
+</script>
+
+</body>
+</html>

@@ -284,5 +284,13 @@ export function setupWebSocket(httpServer: HttpServer): Server {
   return io;
 }
 
+/**
+ * Broadcast an event to all users in a project room.
+ * Used by API routes to push real-time updates (feature changes, agent status, etc.)
+ */
+export function broadcastToProject(io: Server, projectId: string, event: string, data: unknown): void {
+  io.to(`project:${projectId}`).emit(event, data);
+}
+
 // Export for testing
 export { projectDocs, projectPresence };

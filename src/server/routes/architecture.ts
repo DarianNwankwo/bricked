@@ -7,7 +7,6 @@ import type { Request, Response } from 'express';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import type { SessionManager } from '../state/SessionManager.js';
 import {
   type ArchComponent,
   type ArchConnection,
@@ -16,12 +15,10 @@ import {
   indexToComponentId,
   nextComponentIndex,
 } from '../state/ProjectSession.js';
+import { resolveSession } from '../state/resolveSession.js';
+import { syncSessionToDb } from '../services/session-sync.js';
 
 const router = Router();
-
-function getSessionManager(req: Request): SessionManager {
-  return req.app.locals.sessionManager as SessionManager;
-}
 
 // ── Template loading ────────────────────────────────────────────────────
 
@@ -46,6 +43,157 @@ const TEMPLATE_ICONS: Record<string, string> = {
   'microservices': '\u2699\uFE0F',
 };
 
+/**
+ * Layered graph layout (Sugiyama-style).
+ * 1. BFS from source nodes to assign layers
+ * 2. Barycenter heuristic to order nodes within layers (minimise crossings)
+ * 3. Assign x/y with generous spacing, centered on canvas
+ */
+function layoutGraph(
+  compIds: string[],
+  edges: Array<{ from: string; to: string }>,
+  compTypes?: Map<string, string>,
+): Record<string, { x: number; y: number }> {
+  const NODE_W = 200;
+  const H_GAP = 80;       // horizontal gap between nodes
+  const V_GAP = 160;      // vertical gap between layers
+  const START_Y = 80;
+
+  // Background processing types that should be pushed down when they're source nodes
+  const BACKGROUND_TYPES = new Set(['worker', 'job']);
+
+  // Build adjacency structures
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, string[]>();
+  for (const id of compIds) {
+    outgoing.set(id, []);
+    incoming.set(id, []);
+  }
+  for (const e of edges) {
+    outgoing.get(e.from)?.push(e.to);
+    incoming.get(e.from); // ensure entry
+    incoming.get(e.to)?.push(e.from);
+  }
+
+  // --- Layer assignment via longest-path (gives better tier separation) ---
+  const layer = new Map<string, number>();
+  const visited = new Set<string>();
+
+  function longestPath(id: string): number {
+    if (layer.has(id)) return layer.get(id)!;
+    if (visited.has(id)) return 0; // cycle guard
+    visited.add(id);
+    const parents = incoming.get(id) || [];
+    let maxParent = -1;
+    for (const p of parents) {
+      maxParent = Math.max(maxParent, longestPath(p));
+    }
+    const l = maxParent + 1;
+    layer.set(id, l);
+    return l;
+  }
+
+  for (const id of compIds) longestPath(id);
+
+  // --- Demote non-entry source nodes ---
+  // Source nodes (layer 0) that aren't natural entry types (e.g. Worker)
+  // get pushed down to the layer of their deepest outgoing target.
+  if (compTypes) {
+    for (const id of compIds) {
+      if (layer.get(id) !== 0) continue;
+      const nodeType = compTypes.get(id) || '';
+      if (!BACKGROUND_TYPES.has(nodeType)) continue;
+      const targets = outgoing.get(id) || [];
+      if (targets.length === 0) continue;
+      let maxTargetLayer = 0;
+      for (const t of targets) {
+        maxTargetLayer = Math.max(maxTargetLayer, layer.get(t) || 0);
+      }
+      if (maxTargetLayer > 0) {
+        layer.set(id, maxTargetLayer + 1);
+      }
+    }
+  }
+
+  // Group nodes by layer
+  const layers: string[][] = [];
+  for (const id of compIds) {
+    const l = layer.get(id) || 0;
+    while (layers.length <= l) layers.push([]);
+    layers[l].push(id);
+  }
+
+  // --- Barycenter ordering to reduce crossings ---
+  // Helper: find connected nodes in an adjacent layer for barycenter calculation.
+  // For demoted source nodes, outgoing edges may point to the layer ABOVE,
+  // so we check both incoming edges from above and outgoing edges to above.
+  function getNeighborsAbove(id: string, targetLayer: number): string[] {
+    const parents = (incoming.get(id) || []).filter(p => layer.get(p) === targetLayer);
+    if (parents.length > 0) return parents;
+    // Fallback: outgoing edges pointing upward (demoted source nodes)
+    return (outgoing.get(id) || []).filter(t => layer.get(t) === targetLayer);
+  }
+  function getNeighborsBelow(id: string, targetLayer: number): string[] {
+    const children = (outgoing.get(id) || []).filter(c => layer.get(c) === targetLayer);
+    if (children.length > 0) return children;
+    // Fallback: incoming edges pointing downward (shouldn't normally happen, but symmetric)
+    return (incoming.get(id) || []).filter(p => layer.get(p) === targetLayer);
+  }
+
+  for (let pass = 0; pass < 4; pass++) {
+    // Forward sweep (top-down)
+    for (let l = 1; l < layers.length; l++) {
+      const bary = new Map<string, number>();
+      for (const id of layers[l]) {
+        const neighbors = getNeighborsAbove(id, l - 1);
+        if (neighbors.length === 0) {
+          bary.set(id, layers[l].indexOf(id));
+        } else {
+          const avg = neighbors.reduce((sum, n) => sum + layers[l - 1].indexOf(n), 0) / neighbors.length;
+          bary.set(id, avg);
+        }
+      }
+      layers[l].sort((a, b) => (bary.get(a) || 0) - (bary.get(b) || 0));
+    }
+    // Backward sweep (bottom-up)
+    for (let l = layers.length - 2; l >= 0; l--) {
+      const bary = new Map<string, number>();
+      for (const id of layers[l]) {
+        const neighbors = getNeighborsBelow(id, l + 1);
+        if (neighbors.length === 0) {
+          bary.set(id, layers[l].indexOf(id));
+        } else {
+          const avg = neighbors.reduce((sum, n) => sum + layers[l + 1].indexOf(n), 0) / neighbors.length;
+          bary.set(id, avg);
+        }
+      }
+      layers[l].sort((a, b) => (bary.get(a) || 0) - (bary.get(b) || 0));
+    }
+  }
+
+  // --- Position assignment ---
+  // Dynamic gap: compress wider layers so the diagram doesn't get too wide
+  const maxLayerCount = Math.max(...layers.map(l => l.length));
+  const effectiveGap = maxLayerCount <= 3 ? H_GAP : Math.max(40, H_GAP - (maxLayerCount - 3) * 12);
+  const totalMaxWidth = maxLayerCount * NODE_W + (maxLayerCount - 1) * effectiveGap;
+
+  const positions: Record<string, { x: number; y: number }> = {};
+  for (let l = 0; l < layers.length; l++) {
+    const count = layers[l].length;
+    const layerGap = count <= 3 ? H_GAP : Math.max(40, H_GAP - (count - 3) * 12);
+    const layerWidth = count * NODE_W + (count - 1) * layerGap;
+    const offsetX = (totalMaxWidth - layerWidth) / 2;
+    for (let i = 0; i < count; i++) {
+      positions[layers[l][i]] = {
+        x: offsetX + i * (NODE_W + layerGap),
+        y: START_Y + l * V_GAP,
+      };
+    }
+  }
+
+  return positions;
+}
+
 function loadArchitectureTemplates(): Record<string, { name: string; description: string; icon: string; architecture: ManualArchitecture }> {
   const templates: Record<string, { name: string; description: string; icon: string; architecture: ManualArchitecture }> = {};
 
@@ -69,30 +217,34 @@ function loadArchitectureTemplates(): Record<string, { name: string; description
 
     for (const template of templatesData.templates) {
       const id = template.name.toLowerCase().replace(/\s+/g, '-');
-      const components: ArchComponent[] = [];
       const componentNameToId: Record<string, string> = {};
-      const numComponents = template.components.length;
-      const canvasWidth = 600;
-      const startY = 80;
-      const rowHeight = 140;
 
+      // Assign IDs first
       template.components.forEach((comp, index) => {
-        const compId = String.fromCharCode(65 + index);
-        componentNameToId[comp.name] = compId;
-        const row = Math.floor(index / 3);
-        const colCount = Math.min(3, numComponents - row * 3);
-        const col = index % 3;
-        const xSpacing = canvasWidth / (colCount + 1);
-        const x = xSpacing * (col + 1);
-        const y = startY + row * rowHeight;
+        componentNameToId[comp.name] = String.fromCharCode(65 + index);
+      });
 
-        components.push({
+      // Build edges with IDs
+      const edges = template.connections
+        .filter(conn => componentNameToId[conn.from] && componentNameToId[conn.to])
+        .map(conn => ({ from: componentNameToId[conn.from], to: componentNameToId[conn.to] }));
+
+      const compIds = template.components.map((_, i) => String.fromCharCode(65 + i));
+      const compTypes = new Map(template.components.map((comp, i) => [String.fromCharCode(65 + i), comp.type]));
+
+      // Compute layered graph positions
+      const positions = layoutGraph(compIds, edges, compTypes);
+
+      const components: ArchComponent[] = template.components.map((comp, index) => {
+        const compId = String.fromCharCode(65 + index);
+        const pos = positions[compId] || { x: 100, y: 100 };
+        return {
           id: compId,
           name: comp.name,
           type: comp.type as ComponentType,
-          x,
-          y,
-        });
+          x: pos.x,
+          y: pos.y,
+        };
       });
 
       const connections: ArchConnection[] = template.connections
@@ -201,7 +353,7 @@ router.get('/templates/:id', (req: Request, res: Response) => {
 // POST /api/template — load a template
 router.post('/template', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { templateId } = req.body;
     const template = TEMPLATES[templateId];
     if (!template) {
@@ -215,6 +367,7 @@ router.post('/template', (req: Request, res: Response) => {
     session.refreshBACFromCurrentArchitecture();
 
     const ir = session.manualToIR(session.manualArchitecture!);
+    syncSessionToDb(session).catch(() => {});
     res.json({ architecture: session.manualArchitecture, ir, diagram: session.currentDiagram, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -223,7 +376,7 @@ router.post('/template', (req: Request, res: Response) => {
 
 // GET /api/architecture
 router.get('/architecture', (req: Request, res: Response) => {
-  const session = getSessionManager(req).getActiveSession();
+  const session = resolveSession(req);
   if (!session.manualArchitecture) {
     res.json({ architecture: null, bac: session.currentBAC });
     return;
@@ -236,7 +389,7 @@ router.get('/architecture', (req: Request, res: Response) => {
 // POST /api/architecture — replace (undo/redo)
 router.post('/architecture', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { architecture } = req.body;
     if (!architecture || !Array.isArray(architecture.components) || !Array.isArray(architecture.connections)) {
       res.status(400).json({ error: 'Invalid architecture payload' });
@@ -247,6 +400,7 @@ router.post('/architecture', (req: Request, res: Response) => {
     session.currentDiagram = session.manualToMermaid(session.manualArchitecture);
     const ir = session.manualToIR(session.manualArchitecture);
     session.refreshBACFromCurrentArchitecture();
+    syncSessionToDb(session).catch(() => {});
     res.json({ architecture: session.manualArchitecture, ir, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -256,7 +410,7 @@ router.post('/architecture', (req: Request, res: Response) => {
 // PUT /api/architecture/name
 router.put('/architecture/name', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { name } = req.body;
     if (!session.manualArchitecture) {
       session.manualArchitecture = { name, components: [], connections: [] };
@@ -265,6 +419,7 @@ router.put('/architecture/name', (req: Request, res: Response) => {
     }
     session.currentDiagram = session.manualToMermaid(session.manualArchitecture);
     session.refreshBACFromCurrentArchitecture();
+    syncSessionToDb(session).catch(() => {});
     res.json({ success: true, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -274,7 +429,7 @@ router.put('/architecture/name', (req: Request, res: Response) => {
 // POST /api/component — add
 router.post('/component', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { type, name, x, y } = req.body;
     if (!session.manualArchitecture) {
       session.manualArchitecture = { name: 'my-app', components: [], connections: [] };
@@ -291,6 +446,7 @@ router.post('/component', (req: Request, res: Response) => {
     session.currentDiagram = session.manualToMermaid(session.manualArchitecture);
     const ir = session.manualToIR(session.manualArchitecture);
     session.refreshBACFromCurrentArchitecture();
+    syncSessionToDb(session).catch(() => {});
     res.json({ component, architecture: session.manualArchitecture, ir, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -300,7 +456,7 @@ router.post('/component', (req: Request, res: Response) => {
 // PUT /api/component — update
 router.put('/component', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { id, name, x, y } = req.body;
     if (!session.manualArchitecture) {
       res.status(400).json({ error: 'No architecture' });
@@ -317,6 +473,7 @@ router.put('/component', (req: Request, res: Response) => {
     session.currentDiagram = session.manualToMermaid(session.manualArchitecture);
     const ir = session.manualToIR(session.manualArchitecture);
     session.refreshBACFromCurrentArchitecture();
+    syncSessionToDb(session).catch(() => {});
     res.json({ component, architecture: session.manualArchitecture, ir, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -326,7 +483,7 @@ router.put('/component', (req: Request, res: Response) => {
 // DELETE /api/component
 router.delete('/component', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const id = req.query.id as string;
     if (!session.manualArchitecture || !id) {
       res.status(400).json({ error: 'No architecture or missing id' });
@@ -339,6 +496,7 @@ router.delete('/component', (req: Request, res: Response) => {
     session.currentDiagram = session.manualToMermaid(session.manualArchitecture);
     const ir = session.manualToIR(session.manualArchitecture);
     session.refreshBACFromCurrentArchitecture();
+    syncSessionToDb(session).catch(() => {});
     res.json({ architecture: session.manualArchitecture, ir, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -348,7 +506,7 @@ router.delete('/component', (req: Request, res: Response) => {
 // POST /api/connection — add
 router.post('/connection', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { from, to, label, contract } = req.body;
     if (!session.manualArchitecture || !from || !to) {
       res.status(400).json({ error: 'No architecture or missing connection endpoints' });
@@ -370,6 +528,7 @@ router.post('/connection', (req: Request, res: Response) => {
     session.currentDiagram = session.manualToMermaid(session.manualArchitecture);
     const ir = session.manualToIR(session.manualArchitecture);
     session.refreshBACFromCurrentArchitecture();
+    syncSessionToDb(session).catch(() => {});
     res.json({ architecture: session.manualArchitecture, ir, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -379,7 +538,7 @@ router.post('/connection', (req: Request, res: Response) => {
 // PUT /api/connection — update
 router.put('/connection', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const { from, to, label, contract } = req.body;
     if (!session.manualArchitecture || !from || !to) {
       res.status(400).json({ error: 'No architecture or missing connection endpoints' });
@@ -401,6 +560,7 @@ router.put('/connection', (req: Request, res: Response) => {
     session.currentDiagram = session.manualToMermaid(session.manualArchitecture);
     const ir = session.manualToIR(session.manualArchitecture);
     session.refreshBACFromCurrentArchitecture();
+    syncSessionToDb(session).catch(() => {});
     res.json({ architecture: session.manualArchitecture, ir, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -410,7 +570,7 @@ router.put('/connection', (req: Request, res: Response) => {
 // DELETE /api/connection
 router.delete('/connection', (req: Request, res: Response) => {
   try {
-    const session = getSessionManager(req).getActiveSession();
+    const session = resolveSession(req);
     const from = req.query.from as string;
     const to = req.query.to as string;
     if (!session.manualArchitecture || !from || !to) {
@@ -423,6 +583,7 @@ router.delete('/connection', (req: Request, res: Response) => {
     session.currentDiagram = session.manualToMermaid(session.manualArchitecture);
     const ir = session.manualToIR(session.manualArchitecture);
     session.refreshBACFromCurrentArchitecture();
+    syncSessionToDb(session).catch(() => {});
     res.json({ architecture: session.manualArchitecture, ir, bac: session.currentBAC });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
