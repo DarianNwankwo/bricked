@@ -36,7 +36,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "^0.78.0",
     "@octokit/rest": "^22.0.1",
     "better-sqlite3": "^12.6.2",
     "bullmq": "^5.69.2",
