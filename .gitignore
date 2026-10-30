@@ -145,3 +145,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+# Local build output, test artifacts, and databases
+test-results/
+.DS_Store
+*.db
