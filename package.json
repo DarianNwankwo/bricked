@@ -49,11 +49,11 @@
     "openai": "^6.17.0",
     "ora": "^8.0.0",
     "pg": "^8.18.0",
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3",
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4",
     "y-websocket": "^3.0.0",
     "yaml": "^2.4.0",
-    "yjs": "^13.6.29"
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
